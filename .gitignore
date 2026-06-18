@@ -1,0 +1,11 @@
+.dart_tool/
+.packages
+build/
+coverage/
+node_modules/
+dist/
+.env
+.env.local
+.DS_Store
+
+AGENTS.md

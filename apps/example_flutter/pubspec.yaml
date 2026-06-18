@@ -1,0 +1,24 @@
+name: study_room_example
+description: Example Flutter app integrating the study room SDK and UI package.
+publish_to: none
+version: 0.1.0
+
+environment:
+  sdk: ^3.8.0
+
+dependencies:
+  flutter:
+    sdk: flutter
+  study_room_sdk:
+    path: ../../packages/study_room_sdk
+  study_room_ui:
+    path: ../../packages/study_room_ui
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  lints: ^5.0.0
+
+flutter:
+  uses-material-design: true
+

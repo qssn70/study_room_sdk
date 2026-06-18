@@ -1,0 +1,21 @@
+{
+  "name": "study-room-sdk-workspace",
+  "private": true,
+  "scripts": {
+    "test": "npm --workspace study-room-server test",
+    "build": "npm --workspace study-room-server run build"
+  },
+  "overrides": {
+    "@nestjs/platform-express": {
+      "multer": "2.2.0"
+    },
+    "@nestjs/swagger": {
+      "js-yaml": "4.2.0"
+    },
+    "js-yaml": "4.2.0",
+    "multer": "2.2.0"
+  },
+  "workspaces": [
+    "server"
+  ]
+}

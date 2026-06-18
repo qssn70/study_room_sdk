@@ -1,0 +1,37 @@
+services:
+  api:
+    build:
+      context: ./server
+    environment:
+      PORT: 3000
+      STUDY_ROOM_JWT_SECRET: dev-secret
+      DATABASE_URL: postgres://study_room:study_room@postgres:5432/study_room
+      REDIS_URL: redis://redis:6379
+    ports:
+      - "3000:3000"
+    depends_on:
+      - postgres
+      - redis
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: study_room
+      POSTGRES_PASSWORD: study_room
+      POSTGRES_DB: study_room
+    ports:
+      - "5432:5432"
+    volumes:
+      - study_room_postgres:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - study_room_redis:/data
+
+volumes:
+  study_room_postgres:
+  study_room_redis:
+
