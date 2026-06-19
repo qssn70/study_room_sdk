@@ -414,8 +414,9 @@ class StudyRoomClient {
     }
     final token = await _config.tokenProvider();
     _realtimeConnection = connector.connect(_config.realtimeUrl, token: token);
-    _realtimeSubscription =
-        _realtimeConnection!.events.listen(_handleRealtimeEvent);
+    _realtimeSubscription = _realtimeConnection!.events.listen(
+      _handleRealtimeEvent,
+    );
     if (room.appId.isNotEmpty) {
       _realtimeConnection!.joinRoom(appId: room.appId, roomId: room.id);
     }
@@ -528,4 +529,561 @@ class ChatClient {
     );
     return ChatMessage.fromJson(json);
   }
+}
+
+enum PomodoroPreset { twentyFiveFive, fiftyTen, custom }
+
+enum PomodoroStatus { idle, focusing, paused, breaking, finished }
+
+class PomodoroConfig {
+  factory PomodoroConfig({
+    Duration focusDuration = const Duration(minutes: 25),
+    Duration breakDuration = const Duration(minutes: 5),
+    PomodoroPreset preset = PomodoroPreset.twentyFiveFive,
+  }) {
+    _validateDurations(focusDuration, breakDuration);
+    return PomodoroConfig._(
+      focusDuration: focusDuration,
+      breakDuration: breakDuration,
+      preset: preset,
+    );
+  }
+
+  factory PomodoroConfig.fiftyTen() => PomodoroConfig(
+    focusDuration: const Duration(minutes: 50),
+    breakDuration: const Duration(minutes: 10),
+    preset: PomodoroPreset.fiftyTen,
+  );
+
+  factory PomodoroConfig.custom({
+    required Duration focusDuration,
+    required Duration breakDuration,
+  }) => PomodoroConfig(
+    focusDuration: focusDuration,
+    breakDuration: breakDuration,
+    preset: PomodoroPreset.custom,
+  );
+
+  const PomodoroConfig._({
+    required this.focusDuration,
+    required this.breakDuration,
+    required this.preset,
+  });
+
+  final Duration focusDuration;
+  final Duration breakDuration;
+  final PomodoroPreset preset;
+
+  static void _validateDurations(Duration focus, Duration rest) {
+    if (focus <= Duration.zero) {
+      throw const StudyRoomError(
+        'Focus duration must be greater than zero',
+        code: 'invalid_pomodoro_config',
+      );
+    }
+    if (rest < Duration.zero) {
+      throw const StudyRoomError(
+        'Break duration cannot be negative',
+        code: 'invalid_pomodoro_config',
+      );
+    }
+  }
+}
+
+class PomodoroState {
+  const PomodoroState({
+    required this.status,
+    required this.remaining,
+    this.previousStatus,
+  });
+
+  PomodoroState.initial(PomodoroConfig config)
+    : this(status: PomodoroStatus.idle, remaining: config.focusDuration);
+
+  final PomodoroStatus status;
+  final Duration remaining;
+  final PomodoroStatus? previousStatus;
+
+  PomodoroState copyWith({
+    PomodoroStatus? status,
+    Duration? remaining,
+    PomodoroStatus? previousStatus,
+    bool clearPreviousStatus = false,
+  }) {
+    return PomodoroState(
+      status: status ?? this.status,
+      remaining: remaining ?? this.remaining,
+      previousStatus: clearPreviousStatus
+          ? null
+          : previousStatus ?? this.previousStatus,
+    );
+  }
+}
+
+class PomodoroController {
+  PomodoroController({
+    required StudyStore store,
+    PomodoroConfig? config,
+    DateTime Function()? now,
+  }) : _store = store,
+       config = config ?? PomodoroConfig(),
+       _now = now ?? DateTime.now {
+    state = PomodoroState.initial(this.config);
+  }
+
+  final StudyStore _store;
+  final PomodoroConfig config;
+  final DateTime Function() _now;
+  final _states = StreamController<PomodoroState>.broadcast();
+  Timer? _timer;
+  DateTime? _stageStartedAt;
+
+  late PomodoroState state;
+
+  Stream<PomodoroState> get states async* {
+    yield state;
+    yield* _states.stream;
+  }
+
+  void start() {
+    if (state.status == PomodoroStatus.focusing ||
+        state.status == PomodoroStatus.breaking) {
+      return;
+    }
+    _beginStage(PomodoroStatus.focusing, config.focusDuration);
+  }
+
+  void pause() {
+    if (state.status != PomodoroStatus.focusing &&
+        state.status != PomodoroStatus.breaking) {
+      return;
+    }
+    _timer?.cancel();
+    final startedAt = _stageStartedAt;
+    final elapsed = startedAt == null
+        ? Duration.zero
+        : _now().difference(startedAt);
+    final remaining = state.remaining - elapsed;
+    _emit(
+      state.copyWith(
+        status: PomodoroStatus.paused,
+        remaining: remaining > Duration.zero ? remaining : Duration.zero,
+        previousStatus: state.status,
+      ),
+    );
+  }
+
+  void resume() {
+    if (state.status != PomodoroStatus.paused) {
+      return;
+    }
+    _beginStage(
+      state.previousStatus ?? PomodoroStatus.focusing,
+      state.remaining,
+    );
+  }
+
+  void end() {
+    _timer?.cancel();
+    _stageStartedAt = null;
+    _emit(
+      state.copyWith(
+        status: PomodoroStatus.finished,
+        remaining: Duration.zero,
+        clearPreviousStatus: true,
+      ),
+    );
+  }
+
+  void _beginStage(PomodoroStatus status, Duration duration) {
+    _timer?.cancel();
+    _stageStartedAt = _now();
+    _emit(PomodoroState(status: status, remaining: duration));
+    _timer = Timer(duration, () {
+      if (status == PomodoroStatus.focusing) {
+        _completeFocusStage();
+      } else {
+        _completeBreakStage();
+      }
+    });
+  }
+
+  Future<void> _completeFocusStage() async {
+    await _store.addFocusSession(_now(), config.focusDuration);
+    if (config.breakDuration == Duration.zero) {
+      _completeBreakStage();
+      return;
+    }
+    _beginStage(PomodoroStatus.breaking, config.breakDuration);
+  }
+
+  void _completeBreakStage() {
+    _timer?.cancel();
+    _stageStartedAt = null;
+    _emit(PomodoroState.initial(config));
+  }
+
+  void _emit(PomodoroState next) {
+    state = next;
+    if (!_states.isClosed) {
+      _states.add(next);
+    }
+  }
+
+  void dispose() {
+    _timer?.cancel();
+    _states.close();
+  }
+}
+
+class TodayGoal {
+  const TodayGoal({
+    this.text = '',
+    this.targetPomodoros,
+    this.completed = false,
+  });
+
+  final String text;
+  final int? targetPomodoros;
+  final bool completed;
+
+  TodayGoal copyWith({
+    String? text,
+    int? targetPomodoros,
+    bool? completed,
+    bool clearTargetPomodoros = false,
+  }) {
+    return TodayGoal(
+      text: text ?? this.text,
+      targetPomodoros: clearTargetPomodoros
+          ? null
+          : targetPomodoros ?? this.targetPomodoros,
+      completed: completed ?? this.completed,
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+    'text': text,
+    'targetPomodoros': targetPomodoros,
+    'completed': completed,
+  };
+
+  factory TodayGoal.fromJson(Map<String, dynamic> json) {
+    return TodayGoal(
+      text: json['text'] as String? ?? '',
+      targetPomodoros: json['targetPomodoros'] as int?,
+      completed: json['completed'] as bool? ?? false,
+    );
+  }
+}
+
+class StudyTaskRecord {
+  const StudyTaskRecord({
+    required this.id,
+    required this.title,
+    required this.completed,
+  });
+
+  final String id;
+  final String title;
+  final bool completed;
+
+  Map<String, dynamic> toJson() => {
+    'id': id,
+    'title': title,
+    'completed': completed,
+  };
+
+  factory StudyTaskRecord.fromJson(Map<String, dynamic> json) {
+    return StudyTaskRecord(
+      id: json['id'] as String,
+      title: json['title'] as String? ?? '',
+      completed: json['completed'] as bool? ?? false,
+    );
+  }
+}
+
+class StudyDayRecord {
+  const StudyDayRecord({
+    required this.date,
+    this.focusDuration = Duration.zero,
+    this.pomodoroCount = 0,
+  });
+
+  final DateTime date;
+  final Duration focusDuration;
+  final int pomodoroCount;
+
+  bool get hasStudied => pomodoroCount > 0 || focusDuration > Duration.zero;
+
+  StudyDayRecord copyWith({
+    DateTime? date,
+    Duration? focusDuration,
+    int? pomodoroCount,
+  }) {
+    return StudyDayRecord(
+      date: date ?? this.date,
+      focusDuration: focusDuration ?? this.focusDuration,
+      pomodoroCount: pomodoroCount ?? this.pomodoroCount,
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+    'date': _dateKey(date),
+    'focusSeconds': focusDuration.inSeconds,
+    'pomodoroCount': pomodoroCount,
+  };
+
+  factory StudyDayRecord.fromJson(Map<String, dynamic> json) {
+    return StudyDayRecord(
+      date: _parseDateKey(json['date'] as String),
+      focusDuration: Duration(seconds: json['focusSeconds'] as int? ?? 0),
+      pomodoroCount: json['pomodoroCount'] as int? ?? 0,
+    );
+  }
+}
+
+class StudyStats {
+  const StudyStats({
+    required this.todayFocusDuration,
+    required this.todayPomodoroCount,
+    required this.streakDays,
+    required this.lastSevenDays,
+  });
+
+  final Duration todayFocusDuration;
+  final int todayPomodoroCount;
+  final int streakDays;
+  final List<StudyDayRecord> lastSevenDays;
+}
+
+enum StudyReportRange { day, week, month }
+
+class StudyReport {
+  const StudyReport({
+    required this.range,
+    required this.startDate,
+    required this.endDate,
+    required this.days,
+    required this.totalFocusDuration,
+    required this.totalPomodoroCount,
+    required this.streakDays,
+    required this.taskCompletionRate,
+    required this.summary,
+  });
+
+  final StudyReportRange range;
+  final DateTime startDate;
+  final DateTime endDate;
+  final List<StudyDayRecord> days;
+  final Duration totalFocusDuration;
+  final int totalPomodoroCount;
+  final int streakDays;
+  final double? taskCompletionRate;
+  final String summary;
+}
+
+abstract class StudyStore {
+  Future<TodayGoal> loadTodayGoal(DateTime date);
+
+  Future<void> saveTodayGoal(DateTime date, TodayGoal goal);
+
+  Future<StudyDayRecord> loadDayRecord(DateTime date);
+
+  Future<List<StudyDayRecord>> loadDayRecords({
+    required DateTime start,
+    required DateTime end,
+  });
+
+  Future<void> saveDayRecord(StudyDayRecord record);
+
+  Future<void> addFocusSession(
+    DateTime date,
+    Duration duration, {
+    int pomodoros = 1,
+  });
+
+  Future<List<StudyTaskRecord>> loadTaskRecords(DateTime date);
+
+  Future<void> saveTaskRecord(DateTime date, StudyTaskRecord task);
+}
+
+class MemoryStudyStore implements StudyStore {
+  final _goals = <String, TodayGoal>{};
+  final _records = <String, StudyDayRecord>{};
+  final _tasks = <String, List<StudyTaskRecord>>{};
+
+  @override
+  Future<TodayGoal> loadTodayGoal(DateTime date) async {
+    return _goals[_dateKey(date)] ?? const TodayGoal();
+  }
+
+  @override
+  Future<void> saveTodayGoal(DateTime date, TodayGoal goal) async {
+    _goals[_dateKey(date)] = goal;
+  }
+
+  @override
+  Future<StudyDayRecord> loadDayRecord(DateTime date) async {
+    final day = _dateOnly(date);
+    return _records[_dateKey(day)] ?? StudyDayRecord(date: day);
+  }
+
+  @override
+  Future<List<StudyDayRecord>> loadDayRecords({
+    required DateTime start,
+    required DateTime end,
+  }) async {
+    final days = <StudyDayRecord>[];
+    var cursor = _dateOnly(start);
+    final last = _dateOnly(end);
+    while (!cursor.isAfter(last)) {
+      days.add(await loadDayRecord(cursor));
+      cursor = cursor.add(const Duration(days: 1));
+    }
+    return days;
+  }
+
+  @override
+  Future<void> saveDayRecord(StudyDayRecord record) async {
+    final normalized = record.copyWith(date: _dateOnly(record.date));
+    _records[_dateKey(normalized.date)] = normalized;
+  }
+
+  @override
+  Future<void> addFocusSession(
+    DateTime date,
+    Duration duration, {
+    int pomodoros = 1,
+  }) async {
+    final current = await loadDayRecord(date);
+    await saveDayRecord(
+      current.copyWith(
+        focusDuration: current.focusDuration + duration,
+        pomodoroCount: current.pomodoroCount + pomodoros,
+      ),
+    );
+  }
+
+  @override
+  Future<List<StudyTaskRecord>> loadTaskRecords(DateTime date) async {
+    return List.unmodifiable(_tasks[_dateKey(date)] ?? const []);
+  }
+
+  @override
+  Future<void> saveTaskRecord(DateTime date, StudyTaskRecord task) async {
+    final key = _dateKey(date);
+    final tasks = List<StudyTaskRecord>.of(_tasks[key] ?? const []);
+    final index = tasks.indexWhere((existing) => existing.id == task.id);
+    if (index == -1) {
+      tasks.add(task);
+    } else {
+      tasks[index] = task;
+    }
+    _tasks[key] = tasks;
+  }
+}
+
+class StudyAnalytics {
+  const StudyAnalytics(this.store);
+
+  final StudyStore store;
+
+  Future<StudyStats> statsFor(DateTime today) async {
+    final day = _dateOnly(today);
+    final todayRecord = await store.loadDayRecord(day);
+    final lastSevenDays = await store.loadDayRecords(
+      start: day.subtract(const Duration(days: 6)),
+      end: day,
+    );
+    return StudyStats(
+      todayFocusDuration: todayRecord.focusDuration,
+      todayPomodoroCount: todayRecord.pomodoroCount,
+      streakDays: await streakDaysEnding(day),
+      lastSevenDays: lastSevenDays,
+    );
+  }
+
+  Future<int> streakDaysEnding(DateTime day) async {
+    var streak = 0;
+    var cursor = _dateOnly(day);
+    while (true) {
+      final record = await store.loadDayRecord(cursor);
+      if (!record.hasStudied) {
+        return streak;
+      }
+      streak += 1;
+      cursor = cursor.subtract(const Duration(days: 1));
+    }
+  }
+
+  double? taskCompletionRate(List<StudyTaskRecord> tasks) {
+    if (tasks.isEmpty) {
+      return null;
+    }
+    final completed = tasks.where((task) => task.completed).length;
+    return completed / tasks.length;
+  }
+
+  Future<StudyReport> report(StudyReportRange range, DateTime anchor) async {
+    final anchorDay = _dateOnly(anchor);
+    final start = switch (range) {
+      StudyReportRange.day => anchorDay,
+      StudyReportRange.week => anchorDay.subtract(
+        Duration(days: anchorDay.weekday - 1),
+      ),
+      StudyReportRange.month => DateTime(anchorDay.year, anchorDay.month),
+    };
+    final end = switch (range) {
+      StudyReportRange.day => anchorDay,
+      StudyReportRange.week => start.add(const Duration(days: 6)),
+      StudyReportRange.month => DateTime(
+        anchorDay.year,
+        anchorDay.month + 1,
+        0,
+      ),
+    };
+    final days = await store.loadDayRecords(start: start, end: end);
+    final tasks = <StudyTaskRecord>[];
+    var totalFocus = Duration.zero;
+    var totalPomodoros = 0;
+    for (final day in days) {
+      totalFocus += day.focusDuration;
+      totalPomodoros += day.pomodoroCount;
+      tasks.addAll(await store.loadTaskRecords(day.date));
+    }
+    final streak = await streakDaysEnding(end);
+    return StudyReport(
+      range: range,
+      startDate: start,
+      endDate: end,
+      days: days,
+      totalFocusDuration: totalFocus,
+      totalPomodoroCount: totalPomodoros,
+      streakDays: streak,
+      taskCompletionRate: taskCompletionRate(tasks),
+      summary: _summary(totalFocus, totalPomodoros, streak),
+    );
+  }
+
+  String _summary(Duration focus, int pomodoros, int streak) {
+    if (pomodoros == 0 && focus == Duration.zero) {
+      return 'No focus sessions yet.';
+    }
+    return '${focus.inMinutes} focused minutes, $pomodoros pomodoros, $streak day streak.';
+  }
+}
+
+DateTime _dateOnly(DateTime date) => DateTime(date.year, date.month, date.day);
+
+String _dateKey(DateTime date) {
+  final day = _dateOnly(date);
+  final month = day.month.toString().padLeft(2, '0');
+  final datePart = day.day.toString().padLeft(2, '0');
+  return '${day.year}-$month-$datePart';
+}
+
+DateTime _parseDateKey(String key) {
+  final parts = key.split('-').map(int.parse).toList(growable: false);
+  return DateTime(parts[0], parts[1], parts[2]);
 }
