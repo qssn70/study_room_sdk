@@ -9,12 +9,25 @@ Flutter SDK, optional Flutter widgets, and a NestJS reference backend for adding
 - `apps/example_flutter`: minimal integration example.
 - `server`: NestJS reference backend with REST and Socket.IO realtime endpoints.
 
+## Minimal Study Focus Kit
+
+The Flutter packages also include a local-first focus kit that can be embedded without changing the backend:
+
+- Pomodoro timer with 25/5, 50/10, and custom configs.
+- Today goal, study records, personal analytics, and day/week/month reports.
+- Background sound library with Rain, White noise, Cafe, Library, and Keyboard built-in loops plus custom sources.
+- Color, image, and gradient backgrounds with a readability mask.
+- Optional silent companion list based on existing `StudyRoom.members` and `PresenceStatus`.
+
+Use `StudyFocusKitView` for the complete experience, or compose `PomodoroTimerView`, `TodayGoalView`, `StudyStatsView`, `StudyAnalyticsView`, `StudyReportView`, `BackgroundSoundView`, `StudyBackgroundLayer`, and `SilentCompanionList`.
+
 ## Quick Start
 
 ```sh
 docker compose up --build
 cd packages/study_room_sdk && dart test
 cd ../study_room_ui && flutter test
+cd ../../apps/example_flutter && flutter test
 cd ../../server && npm test
 ```
 
@@ -27,4 +40,3 @@ The reference API listens on `http://localhost:3000`. OpenAPI docs are served fr
 - Commercial/private backend licensing can be handled separately.
 
 See `docs/getting-started.md` for integration details.
-

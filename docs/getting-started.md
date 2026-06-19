@@ -58,3 +58,25 @@ Use `StudyRoomView` for a complete screen, or compose smaller widgets:
 - `FocusTimer`
 - `ChatPanel`
 
+## Minimal Study Focus Kit
+
+For a local-first personal study experience, embed the full kit:
+
+```dart
+StudyFocusKitView(
+  store: MemoryStudyStore(),
+  currentUserId: 'user-1',
+  room: room,
+  showCompanions: true,
+)
+```
+
+The kit renders seven modules: Pomodoro, Today goal, Study records, Personal analytics, Background sound, Background, and Companions. Personal analytics are local to the current user and are not written into room presence or shown to other users.
+
+Use `SharedPreferencesStudyStore` from `study_room_ui` for default Flutter persistence. Core SDK logic depends only on the `StudyStore` interface, so host apps can provide their own storage implementation.
+
+Background sounds use bundled `study_room_ui` assets and `just_audio` by default. Pass custom `StudySoundTrack.network`, `StudySoundTrack.file`, or `StudySoundTrack.uri` values to add host-provided sources.
+
+Backgrounds are configured with `StudyBackground.color`, `StudyBackground.image`, or `StudyBackground.gradient`. `maskOpacity` is clamped to `0.0..0.85` to keep foreground UI readable.
+
+`SilentCompanionList` reuses `StudyRoom.members` and filters out the current user and offline members. It only shows avatars, nicknames, and status visuals.
