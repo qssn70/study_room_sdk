@@ -1,5 +1,6 @@
 .dart_tool/
 .packages
+.flutter-plugins-dependencies
 build/
 coverage/
 node_modules/
