@@ -4,7 +4,282 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:study_room_sdk/study_room_sdk.dart';
 import 'package:study_room_ui/study_room_ui.dart';
 
+const _testBackground = StudyBackground.color(
+  Color(0xFF20162D),
+  maskOpacity: 0.25,
+);
+
 void main() {
+  test('StudyFocusKitView exposes all documented visual styles', () {
+    expect(StudyFocusVisualStyle.values, [
+      StudyFocusVisualStyle.split,
+      StudyFocusVisualStyle.centered,
+      StudyFocusVisualStyle.immersiveDock,
+    ]);
+    expect(
+      const StudyFocusKitView().visualStyle,
+      StudyFocusVisualStyle.immersiveDock,
+    );
+  });
+
+  test('StudyFocusKitView defaults to the documented image background', () {
+    const view = StudyFocusKitView();
+
+    expect(view.background.type, StudyBackgroundType.image);
+    expect(view.background.image, isA<NetworkImage>());
+    expect(
+      (view.background.image! as NetworkImage).url,
+      'https://images.unsplash.com/photo-1419242902214-272b3f66ee7a?q=80&w=2000&auto=format&fit=crop',
+    );
+
+    const customBackground = StudyBackground.color(Colors.teal);
+    const customView = StudyFocusKitView(background: customBackground);
+    expect(customView.background, same(customBackground));
+  });
+
+  testWidgets('StudyFocusKitView renders the selected portrait visual style', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    for (final style in StudyFocusVisualStyle.values) {
+      await tester.pumpWidget(
+        MaterialApp(
+          home: StudyFocusKitView(
+            store: MemoryStudyStore(),
+            visualStyle: style,
+            background: _testBackground,
+            soundPlayer: FakeSoundPlayer(),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(
+        find.byKey(Key('study_focus_style_${style.name}_portrait')),
+        findsOneWidget,
+      );
+      expect(find.text('25:00'), findsOneWidget);
+      expect(find.text('自定义'), findsOneWidget);
+      expect(find.text('结束'), findsOneWidget);
+      expect(find.text('跳过'), findsOneWidget);
+      expect(find.text('统计'), findsOneWidget);
+      expect(find.text('成员'), findsOneWidget);
+      expect(find.text('雨声'), findsWidgets);
+      expect(find.byIcon(Icons.bar_chart), findsOneWidget);
+      expect(find.byIcon(Icons.music_note), findsOneWidget);
+      expect(find.byIcon(Icons.group), findsOneWidget);
+    }
+  });
+
+  testWidgets('StudyFocusKitView renders selected styles in landscape panels', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(844, 390);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    for (final style in StudyFocusVisualStyle.values) {
+      await tester.pumpWidget(
+        MaterialApp(
+          home: StudyFocusKitView(
+            store: MemoryStudyStore(),
+            visualStyle: style,
+            background: _testBackground,
+            room: const StudyRoom(
+              id: 'room',
+              title: 'Focus room',
+              members: [
+                StudyMember(
+                  id: 'u1',
+                  displayName: 'You',
+                  avatarUrl: '',
+                  status: PresenceStatus.focusing,
+                ),
+                StudyMember(
+                  id: 'u2',
+                  displayName: 'Kai',
+                  avatarUrl: '',
+                  status: PresenceStatus.idle,
+                ),
+              ],
+            ),
+            soundPlayer: FakeSoundPlayer(),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(
+        find.byKey(Key('study_focus_style_${style.name}_landscape')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const Key('study_focus_landscape_side_panel')),
+        findsOneWidget,
+      );
+      expect(find.text('Kai'), findsOneWidget);
+      expect(find.text('陪伴中'), findsOneWidget);
+      expect(find.text('今日目标'), findsOneWidget);
+      expect(find.text('背景音'), findsOneWidget);
+      expect(find.text('个人统计（私密）'), findsOneWidget);
+    }
+  });
+
+  testWidgets('StudyFocusKitView renders the desktop landscape workspace', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1920, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final store = MemoryStudyStore();
+    await store.saveTodayGoal(
+      DateTime(2026, 6, 19),
+      const TodayGoal(text: '完成 SDK 文档编写', targetPomodoros: 4),
+    );
+    await store.addFocusSession(
+      DateTime(2026, 6, 19),
+      const Duration(minutes: 50),
+      pomodoros: 2,
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: StudyFocusKitView(
+          store: store,
+          currentUserId: 'u1',
+          date: DateTime(2026, 6, 19),
+          background: _testBackground,
+          room: const StudyRoom(
+            id: 'room',
+            title: 'Focus room',
+            members: [
+              StudyMember(
+                id: 'u1',
+                displayName: 'You',
+                avatarUrl: '',
+                status: PresenceStatus.focusing,
+              ),
+              StudyMember(
+                id: 'u2',
+                displayName: 'Alex',
+                avatarUrl: '',
+                status: PresenceStatus.focusing,
+              ),
+              StudyMember(
+                id: 'u3',
+                displayName: 'Bob',
+                avatarUrl: '',
+                status: PresenceStatus.idle,
+              ),
+              StudyMember(
+                id: 'u4',
+                displayName: 'Cathy',
+                avatarUrl: '',
+                status: PresenceStatus.away,
+              ),
+            ],
+          ),
+          soundPlayer: FakeSoundPlayer(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('study_focus_desktop_shell')), findsOneWidget);
+    expect(
+      find.byKey(const Key('study_focus_style_immersiveDock_landscape')),
+      findsOneWidget,
+    );
+    expect(find.text('极简自习室'), findsOneWidget);
+    expect(find.text('专注'), findsOneWidget);
+    expect(find.text('数据统计'), findsOneWidget);
+    expect(find.text('历史记录'), findsOneWidget);
+    expect(find.text('设置'), findsOneWidget);
+    expect(find.text('新建任务'), findsOneWidget);
+    expect(find.text('25 / 5 分钟'), findsOneWidget);
+    expect(find.text('50 / 10 分钟'), findsOneWidget);
+    expect(find.text('自定义时长'), findsOneWidget);
+    expect(find.text('结束当前轮次'), findsOneWidget);
+    expect(find.text('跳至休息'), findsOneWidget);
+    expect(find.text('静默陪伴'), findsOneWidget);
+    expect(find.text('在线 3 人'), findsOneWidget);
+    expect(find.text('白噪音'), findsOneWidget);
+    expect(find.text('今日数据 (私密)'), findsOneWidget);
+    expect(find.text('完成 SDK 文档编写'), findsOneWidget);
+    expect(find.textContaining('预计还需'), findsOneWidget);
+
+    final sidebarSize = tester.getSize(
+      find.byKey(const Key('study_focus_desktop_sidebar')),
+    );
+    expect(sidebarSize.width, inInclusiveRange(340, 420));
+  });
+
+  testWidgets('StudyFocusKitView reserves desktop shell for wide landscape', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1200, 1600);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: StudyFocusKitView(
+          store: MemoryStudyStore(),
+          background: _testBackground,
+          soundPlayer: FakeSoundPlayer(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('study_focus_desktop_shell')), findsNothing);
+    expect(find.byKey(const Key('study_focus_desktop_sidebar')), findsNothing);
+    expect(
+      find.byKey(const Key('study_focus_style_immersiveDock_landscape')),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets('StudyFocusKitView scales focus controls to the viewport', (
+    tester,
+  ) async {
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    Future<Size> timerSizeFor(Size viewport) async {
+      tester.view.physicalSize = viewport;
+      tester.view.devicePixelRatio = 1;
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: StudyFocusKitView(
+            store: MemoryStudyStore(),
+            background: _testBackground,
+            soundPlayer: FakeSoundPlayer(),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      return tester.getSize(find.byKey(const Key('study_focus_timer')));
+    }
+
+    final phoneTimer = await timerSizeFor(const Size(390, 844));
+    final desktopTimer = await timerSizeFor(const Size(1440, 900));
+
+    expect(phoneTimer.width, lessThanOrEqualTo(260));
+    expect(desktopTimer.width, greaterThan(phoneTimer.width + 80));
+    expect(desktopTimer.height, desktopTimer.width);
+  });
+
   testWidgets('MemberGrid renders names and presence labels', (tester) async {
     await tester.pumpWidget(
       MaterialApp(
@@ -80,14 +355,20 @@ void main() {
     expect(sent, 'hello');
   });
 
-  testWidgets('StudyFocusKitView renders all seven study modules', (
+  testWidgets('StudyFocusKitView opens the documented dock modules', (
     tester,
   ) async {
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
     await tester.pumpWidget(
       MaterialApp(
         home: StudyFocusKitView(
           store: MemoryStudyStore(),
           currentUserId: 'u1',
+          background: _testBackground,
           room: const StudyRoom(
             id: 'room',
             title: 'Focus room',
@@ -112,13 +393,25 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.text('Pomodoro'), findsOneWidget);
-    expect(find.text('Today goal'), findsWidgets);
-    expect(find.text('Study records'), findsOneWidget);
-    expect(find.text('Personal analytics'), findsOneWidget);
-    expect(find.text('Background sound'), findsOneWidget);
-    expect(find.text('Background'), findsOneWidget);
-    expect(find.text('Companions'), findsOneWidget);
+    expect(
+      find.byKey(const Key('study_focus_style_immersiveDock_portrait')),
+      findsOneWidget,
+    );
+    expect(find.byKey(const Key('study_focus_goal_card')), findsOneWidget);
+    expect(find.text('25:00'), findsOneWidget);
+
+    await tester.tap(find.byIcon(Icons.bar_chart));
+    await tester.pumpAndSettle();
+    expect(find.text('个人统计（私密）'), findsOneWidget);
+
+    await tester.tap(find.byIcon(Icons.music_note));
+    await tester.pumpAndSettle();
+    expect(find.text('背景音'), findsOneWidget);
+
+    await tester.tap(find.byIcon(Icons.group));
+    await tester.pumpAndSettle();
+    expect(find.text('陪伴中'), findsOneWidget);
+    expect(find.text('Kai'), findsOneWidget);
   });
 
   testWidgets('StudyFocusKitView persists data locally by default', (
@@ -130,13 +423,17 @@ void main() {
       MaterialApp(
         home: StudyFocusKitView(
           date: DateTime(2026, 6, 19),
+          background: _testBackground,
           soundPlayer: FakeSoundPlayer(),
         ),
       ),
     );
     await tester.pumpAndSettle();
 
-    await tester.enterText(find.bySemanticsLabel('Today goal'), 'Write notes');
+    await tester.enterText(
+      find.byKey(const Key('study_focus_goal_text_field')),
+      'Write notes',
+    );
     await tester.pumpAndSettle();
 
     await tester.pumpWidget(const SizedBox.shrink());
@@ -145,6 +442,7 @@ void main() {
       MaterialApp(
         home: StudyFocusKitView(
           date: DateTime(2026, 6, 19),
+          background: _testBackground,
           soundPlayer: FakeSoundPlayer(),
         ),
       ),

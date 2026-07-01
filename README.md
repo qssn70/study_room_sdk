@@ -21,6 +21,35 @@ The Flutter packages also include a local-first focus kit that can be embedded w
 
 Use `StudyFocusKitView` for the complete experience, or compose `PomodoroTimerView`, `TodayGoalView`, `StudyStatsView`, `StudyAnalyticsView`, `StudyReportView`, `BackgroundSoundView`, `StudyBackgroundLayer`, and `SilentCompanionList`.
 
+`StudyFocusKitView` includes the three visual styles from `docs/UI` and defaults to the recommended immersive dock layout:
+
+```dart
+StudyFocusKitView(
+  visualStyle: StudyFocusVisualStyle.immersiveDock,
+)
+```
+
+The default background is exposed as `studyFocusDefaultBackground`, backed by
+`studyFocusDefaultBackgroundImageUrl`:
+
+```text
+https://images.unsplash.com/photo-1419242902214-272b3f66ee7a?q=80&w=2000&auto=format&fit=crop
+```
+
+Apps can still override it with any supported `StudyBackground`:
+
+```dart
+StudyFocusKitView(
+  background: StudyBackground.image(image: myImageProvider),
+)
+```
+
+Downstream apps can switch freely between:
+
+- `StudyFocusVisualStyle.split`: portrait top/bottom split layout.
+- `StudyFocusVisualStyle.centered`: portrait core-centered layout.
+- `StudyFocusVisualStyle.immersiveDock`: recommended immersive bottom-docked layout.
+
 ## Quick Start
 
 ```sh
