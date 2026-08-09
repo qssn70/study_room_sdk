@@ -18,6 +18,7 @@ void main() {
   });
 
   test('joinRoom sends bearer auth and publishes room state', () async {
+    final realtime = FakeRealtimeConnector();
     final transport = FakeTransport({
       '/rooms/room-1/join': {
         'id': 'room-1',
@@ -39,6 +40,7 @@ void main() {
         realtimeUrl: Uri.parse('ws://localhost:3000/realtime'),
         tokenProvider: () async => 'jwt-token',
         transport: transport,
+        realtimeConnector: realtime,
       ),
     );
 
@@ -47,8 +49,77 @@ void main() {
     expect(room.title, 'Morning focus');
     expect(room.members.single.status, PresenceStatus.focusing);
     expect(transport.lastAuthorization, 'Bearer jwt-token');
+    expect(realtime.connection.joinedRoomId, 'room-1');
     await expectLater(sdk.client.roomStateStream, emits(room));
+
+    await sdk.client.leaveRoom('room-1');
+    expect(realtime.connection.leftRoomId, 'room-1');
+    await sdk.client.dispose();
   });
+
+  test(
+    'client tracks multiple rooms, presence, and room-aware events',
+    () async {
+      final realtime = FakeRealtimeConnector();
+      final transport = FakeTransport({
+        '/rooms/room-1/join': {
+          'id': 'room-1',
+          'title': 'One',
+          'members': <Object>[],
+        },
+        '/rooms/room-2/join': {
+          'id': 'room-2',
+          'title': 'Two',
+          'members': <Object>[],
+        },
+        '/rooms/room-1/leave': <String, dynamic>{},
+      });
+      final sdk = StudyRoomSdk.initialize(
+        StudyRoomConfig(
+          apiBaseUrl: Uri.parse('http://localhost:3000'),
+          realtimeUrl: Uri.parse('ws://localhost:3000/realtime'),
+          tokenProvider: () async => 'jwt-token',
+          transport: transport,
+          realtimeConnector: realtime,
+        ),
+      );
+
+      await sdk.client.joinRoom('room-1');
+      await sdk.client.joinRoom('room-2');
+      expect(realtime.connection.joinedRoomIds, ['room-1', 'room-2']);
+      expect(sdk.client.roomSnapshot('room-2')?.title, 'Two');
+
+      sdk.client.updatePresence('room-2', PresenceStatus.focusing);
+      expect(realtime.connection.presenceUpdates, [
+        ('room-2', PresenceStatus.focusing),
+      ]);
+      expect(
+        () => sdk.client.updatePresence('room-2', PresenceStatus.offline),
+        throwsA(isA<StudyRoomError>()),
+      );
+
+      final nextMember = sdk.client.roomMemberEventsStream.first;
+      realtime.connection.emit({
+        'type': 'member.updated',
+        'roomId': 'room-2',
+        'payload': {
+          'id': 'member-2',
+          'displayName': 'Mei',
+          'avatarUrl': '',
+          'status': 'idle',
+        },
+      });
+      final memberEvent = await nextMember;
+      expect(memberEvent.roomId, 'room-2');
+      expect(memberEvent.member.status, PresenceStatus.idle);
+
+      await sdk.client.leaveRoom('room-1');
+      expect(realtime.connection.leftRoomIds, ['room-1']);
+      expect(sdk.client.roomSnapshot('room-1'), isNull);
+      expect(sdk.client.roomSnapshot('room-2'), isNotNull);
+      await sdk.client.dispose();
+    },
+  );
 
   test('StudySession enforces start pause resume finish transitions', () async {
     final transport = FakeTransport({
@@ -122,6 +193,82 @@ void main() {
     },
   );
 
+  test('ChatClient loads authenticated history in server order', () async {
+    final transport = FakeTransport({
+      '/rooms/room-1/chat': {
+        'messages': [
+          {
+            'id': 'message-1',
+            'roomId': 'room-1',
+            'senderId': 'user-1',
+            'senderName': 'Lin',
+            'text': 'first',
+            'sentAt': '2026-06-18T03:00:00.000Z',
+          },
+          {
+            'id': 'message-2',
+            'roomId': 'room-1',
+            'senderId': 'user-2',
+            'senderName': 'Mei',
+            'text': 'second',
+            'sentAt': '2026-06-18T03:01:00.000Z',
+          },
+        ],
+      },
+    });
+    final chat = ChatClient(
+      roomId: 'room-1',
+      transport: transport,
+      tokenProvider: () async => 'jwt-token',
+    );
+
+    final history = await chat.loadHistory();
+
+    expect(history.map((message) => message.text), ['first', 'second']);
+    expect(transport.lastPath, '/rooms/room-1/chat');
+    expect(transport.lastAuthorization, 'Bearer jwt-token');
+  });
+
+  test('StudyStore emits changes and persists tasks and settings', () async {
+    final store = MemoryStudyStore();
+    final changes = <StudyStoreChange>[];
+    final subscription = store.changes.listen(changes.add);
+    final date = DateTime(2026, 6, 19, 12);
+    const task = StudyTaskRecord(
+      id: 'task-1',
+      title: 'Write tests',
+      completed: false,
+    );
+
+    await store.saveTodayGoal(date, const TodayGoal(text: 'Ship'));
+    await store.addFocusSession(date, const Duration(minutes: 25));
+    await store.saveTaskRecord(date, task);
+    await store.deleteTaskRecord(date, task.id);
+    await store.saveSettings(
+      StudyFocusSettings(
+        soundTrackId: 'rain',
+        soundVolume: 2,
+        backgroundMaskOpacity: -1,
+        desktopSection: 'history',
+      ),
+    );
+
+    expect(changes.map((change) => change.kind), [
+      StudyStoreChangeKind.goal,
+      StudyStoreChangeKind.dayRecord,
+      StudyStoreChangeKind.tasks,
+      StudyStoreChangeKind.tasks,
+      StudyStoreChangeKind.settings,
+    ]);
+    expect(changes.first.date, DateTime(2026, 6, 19));
+    expect(await store.loadTaskRecords(date), isEmpty);
+    final settings = await store.loadSettings();
+    expect(settings.soundVolume, 1);
+    expect(settings.backgroundMaskOpacity, 0);
+    expect(settings.desktopSection, 'history');
+    await subscription.cancel();
+  });
+
   group('PomodoroController', () {
     test('supports default, 50/10, and custom duration configs', () {
       expect(PomodoroConfig().focusDuration, const Duration(minutes: 25));
@@ -194,6 +341,110 @@ void main() {
       expect(controller.state.status, PomodoroStatus.idle);
       controller.dispose();
     });
+
+    test('ticks remaining time from an absolute deadline', () async {
+      final controller = PomodoroController(
+        store: MemoryStudyStore(),
+        config: PomodoroConfig.custom(
+          focusDuration: const Duration(seconds: 3),
+          breakDuration: Duration.zero,
+        ),
+      );
+
+      controller.start();
+      await Future<void>.delayed(const Duration(milliseconds: 1100));
+
+      expect(controller.state.remaining, lessThan(const Duration(seconds: 3)));
+      expect(controller.state.remaining, greaterThan(Duration.zero));
+      controller.end();
+      controller.dispose();
+    });
+
+    test('pause recalculates elapsed time and resume preserves it', () {
+      var now = DateTime(2026, 6, 19, 10);
+      final controller = PomodoroController(
+        store: MemoryStudyStore(),
+        config: PomodoroConfig.custom(
+          focusDuration: const Duration(minutes: 25),
+          breakDuration: const Duration(minutes: 5),
+        ),
+        now: () => now,
+      );
+
+      controller.start();
+      now = now.add(const Duration(minutes: 7));
+      controller.pause();
+      expect(controller.state.remaining, const Duration(minutes: 18));
+      controller.resume();
+      expect(controller.state.remaining, const Duration(minutes: 18));
+      controller.end();
+      controller.dispose();
+    });
+
+    test('skip moves stages without recording a pomodoro', () async {
+      final store = MemoryStudyStore();
+      final controller = PomodoroController(
+        store: store,
+        config: PomodoroConfig.custom(
+          focusDuration: const Duration(minutes: 25),
+          breakDuration: const Duration(minutes: 5),
+        ),
+      );
+
+      controller.start();
+      controller.skip();
+      expect(controller.state.status, PomodoroStatus.breaking);
+      controller.skip();
+      expect(controller.state.status, PomodoroStatus.idle);
+      expect((await store.loadDayRecord(DateTime.now())).pomodoroCount, 0);
+      controller.dispose();
+    });
+
+    test('config can only change outside an active stage', () {
+      final controller = PomodoroController(store: MemoryStudyStore());
+      controller.setConfig(PomodoroConfig.fiftyTen());
+      expect(controller.config.preset, PomodoroPreset.fiftyTen);
+
+      controller.start();
+      expect(
+        () => controller.setConfig(PomodoroConfig()),
+        throwsA(
+          isA<StudyRoomError>().having(
+            (error) => error.code,
+            'code',
+            'pomodoro_active',
+          ),
+        ),
+      );
+      controller.end();
+      controller.dispose();
+    });
+
+    test(
+      'persistence failures finish the stage and surface a stream error',
+      () async {
+        final controller = PomodoroController(
+          store: FailingStudyStore(),
+          config: PomodoroConfig.custom(
+            focusDuration: const Duration(milliseconds: 20),
+            breakDuration: Duration.zero,
+          ),
+        );
+        final errors = <Object>[];
+        final subscription = controller.states.listen(
+          (_) {},
+          onError: (Object error) => errors.add(error),
+        );
+
+        controller.start();
+        await Future<void>.delayed(const Duration(milliseconds: 40));
+
+        expect(controller.state.status, PomodoroStatus.finished);
+        expect(errors, hasLength(1));
+        await subscription.cancel();
+        controller.dispose();
+      },
+    );
   });
 
   group('local study store and analytics', () {
@@ -367,5 +618,62 @@ class FakeTransport implements StudyRoomTransport {
     lastAuthorization = headers['Authorization'];
     lastPath = path;
     return responses[path] ?? <String, dynamic>{};
+  }
+}
+
+class FakeRealtimeConnector implements StudyRoomRealtimeConnector {
+  final connection = FakeRealtimeConnection();
+
+  @override
+  StudyRoomRealtimeConnection connect(Uri url, {required String token}) {
+    return connection;
+  }
+}
+
+class FakeRealtimeConnection implements StudyRoomRealtimeConnection {
+  final _events = StreamController<Map<String, dynamic>>.broadcast();
+  String? joinedRoomId;
+  String? leftRoomId;
+  final joinedRoomIds = <String>[];
+  final leftRoomIds = <String>[];
+  final presenceUpdates = <(String, PresenceStatus)>[];
+
+  @override
+  Stream<Map<String, dynamic>> get events => _events.stream;
+
+  @override
+  void joinRoom({required String roomId}) {
+    joinedRoomId = roomId;
+    joinedRoomIds.add(roomId);
+  }
+
+  @override
+  void leaveRoom({required String roomId}) {
+    leftRoomId = roomId;
+    leftRoomIds.add(roomId);
+  }
+
+  @override
+  void updatePresence({
+    required String roomId,
+    required PresenceStatus status,
+  }) {
+    presenceUpdates.add((roomId, status));
+  }
+
+  void emit(Map<String, dynamic> event) => _events.add(event);
+
+  @override
+  Future<void> close() => _events.close();
+}
+
+class FailingStudyStore extends MemoryStudyStore {
+  @override
+  Future<void> addFocusSession(
+    DateTime date,
+    Duration duration, {
+    int pomodoros = 1,
+  }) async {
+    throw StateError('storage failed');
   }
 }

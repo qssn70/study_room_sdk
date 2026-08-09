@@ -1,6 +1,6 @@
 name: study_room_sdk
 description: Core Flutter SDK for integrating online study rooms.
-version: 0.1.0
+version: 0.3.0
 publish_to: none
 
 environment:

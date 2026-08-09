@@ -132,7 +132,11 @@ abstract class StudyRoomRealtimeConnector {
 abstract class StudyRoomRealtimeConnection {
   Stream<Map<String, dynamic>> get events;
 
-  void joinRoom({required String appId, required String roomId});
+  void joinRoom({required String roomId});
+
+  void leaveRoom({required String roomId});
+
+  void updatePresence({required String roomId, required PresenceStatus status});
 
   Future<void> close();
 }
@@ -167,8 +171,19 @@ class _SocketIoStudyRoomRealtimeConnection
 
   final io.Socket _socket;
   final _events = StreamController<Map<String, dynamic>>.broadcast();
+  final _joinedRoomIds = <String>{};
+  final _presenceByRoom = <String, PresenceStatus>{};
 
   void connect() {
+    _socket.onConnect((_) {
+      for (final roomId in _joinedRoomIds) {
+        _emitJoin(roomId);
+        final status = _presenceByRoom[roomId];
+        if (status != null) {
+          _emitPresence(roomId, status);
+        }
+      }
+    });
     _socket.on('study-room.event', (dynamic event) {
       if (event is Map) {
         _events.add(Map<String, dynamic>.from(event));
@@ -181,8 +196,45 @@ class _SocketIoStudyRoomRealtimeConnection
   Stream<Map<String, dynamic>> get events => _events.stream;
 
   @override
-  void joinRoom({required String appId, required String roomId}) {
-    _socket.emit('room.join', {'appId': appId, 'roomId': roomId});
+  void joinRoom({required String roomId}) {
+    _joinedRoomIds.add(roomId);
+    if (_socket.connected) {
+      _emitJoin(roomId);
+    }
+  }
+
+  @override
+  void leaveRoom({required String roomId}) {
+    _joinedRoomIds.remove(roomId);
+    _presenceByRoom.remove(roomId);
+    if (_socket.connected) {
+      _socket.emit('room.leave', {'roomId': roomId});
+    }
+  }
+
+  @override
+  void updatePresence({
+    required String roomId,
+    required PresenceStatus status,
+  }) {
+    if (status == PresenceStatus.offline) {
+      throw const StudyRoomError(
+        'Offline presence is controlled by the server',
+        code: 'invalid_presence',
+      );
+    }
+    _presenceByRoom[roomId] = status;
+    if (_socket.connected) {
+      _emitPresence(roomId, status);
+    }
+  }
+
+  void _emitJoin(String roomId) {
+    _socket.emit('room.join', {'roomId': roomId});
+  }
+
+  void _emitPresence(String roomId, PresenceStatus status) {
+    _socket.emit('presence.update', {'roomId': roomId, 'status': status.name});
   }
 
   @override
@@ -246,6 +298,13 @@ class StudyMember {
     'avatarUrl': avatarUrl,
     'status': status.name,
   };
+}
+
+class StudyRoomMemberEvent {
+  const StudyRoomMemberEvent({required this.roomId, required this.member});
+
+  final String roomId;
+  final StudyMember member;
 }
 
 class StudyRoom {
@@ -348,25 +407,45 @@ class StudyRoomClient {
   final StudyRoomTransport _transport;
   final _roomStateController = StreamController<StudyRoom>.broadcast();
   final _memberEventsController = StreamController<StudyMember>.broadcast();
+  final _roomMemberEventsController =
+      StreamController<StudyRoomMemberEvent>.broadcast();
   final _chatMessagesController = StreamController<ChatMessage>.broadcast();
   final _sessionEventsController =
       StreamController<StudySessionState>.broadcast();
   StreamSubscription<Map<String, dynamic>>? _realtimeSubscription;
   StudyRoomRealtimeConnection? _realtimeConnection;
-  StudyRoom? _latestRoom;
+  final _latestRooms = <String, StudyRoom>{};
+  final _joinedRoomIds = <String>{};
 
   Stream<StudyRoom> get roomStateStream async* {
-    final latest = _latestRoom;
-    if (latest != null) {
-      yield latest;
+    for (final room in _latestRooms.values) {
+      yield room;
     }
     yield* _roomStateController.stream;
   }
 
+  @Deprecated('Use roomMemberEventsStream for room-aware member events.')
   Stream<StudyMember> get memberEventsStream => _memberEventsController.stream;
+  Stream<StudyRoomMemberEvent> get roomMemberEventsStream =>
+      _roomMemberEventsController.stream;
   Stream<ChatMessage> get chatMessagesStream => _chatMessagesController.stream;
   Stream<StudySessionState> get sessionEventsStream =>
       _sessionEventsController.stream;
+
+  StudyRoom? roomSnapshot(String roomId) => _latestRooms[roomId];
+
+  Stream<StudyRoom> roomStateFor(String roomId) async* {
+    final latest = _latestRooms[roomId];
+    if (latest != null) {
+      yield latest;
+    }
+    yield* _roomStateController.stream.where((room) => room.id == roomId);
+  }
+
+  Stream<StudyRoomMemberEvent> memberEventsFor(String roomId) =>
+      _roomMemberEventsController.stream.where(
+        (event) => event.roomId == roomId,
+      );
 
   Future<StudyRoom> joinRoom(String roomId) async {
     final headers = await _authHeaders();
@@ -375,15 +454,35 @@ class StudyRoomClient {
       headers: headers,
     );
     final room = StudyRoom.fromJson(json);
-    _latestRoom = room;
+    _latestRooms[room.id] = room;
+    _joinedRoomIds.add(room.id);
     _roomStateController.add(room);
     await _connectRealtime(room);
     return room;
   }
 
   Future<void> leaveRoom(String roomId) async {
+    _realtimeConnection?.leaveRoom(roomId: roomId);
+    _joinedRoomIds.remove(roomId);
+    _latestRooms.remove(roomId);
     final headers = await _authHeaders();
     await _transport.postJson('/rooms/$roomId/leave', headers: headers);
+  }
+
+  void updatePresence(String roomId, PresenceStatus status) {
+    if (!_joinedRoomIds.contains(roomId)) {
+      throw StudyRoomError(
+        'Join room $roomId before updating presence',
+        code: 'room_not_joined',
+      );
+    }
+    if (status == PresenceStatus.offline) {
+      throw const StudyRoomError(
+        'Offline presence is controlled by the server',
+        code: 'invalid_presence',
+      );
+    }
+    _realtimeConnection!.updatePresence(roomId: roomId, status: status);
   }
 
   StudySession session(String roomId) => StudySession(
@@ -409,17 +508,20 @@ class StudyRoomClient {
   Future<void> _connectRealtime(StudyRoom room) async {
     final connector =
         _config.realtimeConnector ?? const SocketIoStudyRoomRealtimeConnector();
-    if (_realtimeSubscription != null) {
-      return;
+    if (_realtimeSubscription == null) {
+      final token = await _config.tokenProvider();
+      if (token.trim().isEmpty) {
+        throw const StudyRoomError('Token provider returned an empty token');
+      }
+      _realtimeConnection = connector.connect(
+        _config.realtimeUrl,
+        token: token,
+      );
+      _realtimeSubscription = _realtimeConnection!.events.listen(
+        _handleRealtimeEvent,
+      );
     }
-    final token = await _config.tokenProvider();
-    _realtimeConnection = connector.connect(_config.realtimeUrl, token: token);
-    _realtimeSubscription = _realtimeConnection!.events.listen(
-      _handleRealtimeEvent,
-    );
-    if (room.appId.isNotEmpty) {
-      _realtimeConnection!.joinRoom(appId: room.appId, roomId: room.id);
-    }
+    _realtimeConnection!.joinRoom(roomId: room.id);
   }
 
   void _handleRealtimeEvent(Map<String, dynamic> event) {
@@ -428,11 +530,16 @@ class StudyRoomClient {
         final room = StudyRoom.fromJson(
           event['payload'] as Map<String, dynamic>,
         );
-        _latestRoom = room;
+        _latestRooms[room.id] = room;
         _roomStateController.add(room);
       case 'member.updated':
-        _memberEventsController.add(
-          StudyMember.fromJson(event['payload'] as Map<String, dynamic>),
+        final member = StudyMember.fromJson(
+          event['payload'] as Map<String, dynamic>,
+        );
+        final roomId = event['roomId'] as String? ?? '';
+        _memberEventsController.add(member);
+        _roomMemberEventsController.add(
+          StudyRoomMemberEvent(roomId: roomId, member: member),
         );
       case 'chat.message':
         _chatMessagesController.add(
@@ -450,6 +557,7 @@ class StudyRoomClient {
     await _realtimeConnection?.close();
     await _roomStateController.close();
     await _memberEventsController.close();
+    await _roomMemberEventsController.close();
     await _chatMessagesController.close();
     await _sessionEventsController.close();
   }
@@ -515,6 +623,21 @@ class ChatClient {
   final String roomId;
   final StudyRoomTransport _transport;
   final TokenProvider _tokenProvider;
+
+  Future<List<ChatMessage>> loadHistory() async {
+    final token = await _tokenProvider();
+    if (token.trim().isEmpty) {
+      throw const StudyRoomError('Token provider returned an empty token');
+    }
+    final json = await _transport.getJson(
+      '/rooms/$roomId/chat',
+      headers: {'Authorization': 'Bearer $token'},
+    );
+    return (json['messages'] as List<dynamic>? ?? const [])
+        .whereType<Map<String, dynamic>>()
+        .map(ChatMessage.fromJson)
+        .toList(growable: false);
+  }
 
   Future<ChatMessage> sendMessage(String text) async {
     final trimmed = text.trim();
@@ -626,19 +749,25 @@ class PomodoroController {
     PomodoroConfig? config,
     DateTime Function()? now,
   }) : _store = store,
-       config = config ?? PomodoroConfig(),
+       _config = config ?? PomodoroConfig(),
        _now = now ?? DateTime.now {
-    state = PomodoroState.initial(this.config);
+    state = PomodoroState.initial(_config);
   }
 
   final StudyStore _store;
-  final PomodoroConfig config;
+  PomodoroConfig _config;
   final DateTime Function() _now;
   final _states = StreamController<PomodoroState>.broadcast();
-  Timer? _timer;
-  DateTime? _stageStartedAt;
+  Timer? _ticker;
+  Timer? _completionTimer;
+  DateTime? _stageEndsAt;
+  var _stageGeneration = 0;
+  var _completing = false;
+  var _disposed = false;
 
   late PomodoroState state;
+
+  PomodoroConfig get config => _config;
 
   Stream<PomodoroState> get states async* {
     yield state;
@@ -646,8 +775,8 @@ class PomodoroController {
   }
 
   void start() {
-    if (state.status == PomodoroStatus.focusing ||
-        state.status == PomodoroStatus.breaking) {
+    if (state.status != PomodoroStatus.idle &&
+        state.status != PomodoroStatus.finished) {
       return;
     }
     _beginStage(PomodoroStatus.focusing, config.focusDuration);
@@ -658,17 +787,14 @@ class PomodoroController {
         state.status != PomodoroStatus.breaking) {
       return;
     }
-    _timer?.cancel();
-    final startedAt = _stageStartedAt;
-    final elapsed = startedAt == null
-        ? Duration.zero
-        : _now().difference(startedAt);
-    final remaining = state.remaining - elapsed;
+    final previousStatus = state.status;
+    final remaining = _remainingNow();
+    _cancelStage();
     _emit(
       state.copyWith(
         status: PomodoroStatus.paused,
         remaining: remaining > Duration.zero ? remaining : Duration.zero,
-        previousStatus: state.status,
+        previousStatus: previousStatus,
       ),
     );
   }
@@ -677,15 +803,31 @@ class PomodoroController {
     if (state.status != PomodoroStatus.paused) {
       return;
     }
-    _beginStage(
-      state.previousStatus ?? PomodoroStatus.focusing,
-      state.remaining,
-    );
+    final stage = state.previousStatus ?? PomodoroStatus.focusing;
+    if (state.remaining <= Duration.zero) {
+      _skipStage(stage);
+      return;
+    }
+    _beginStage(stage, state.remaining);
+  }
+
+  void skip() {
+    final stage = switch (state.status) {
+      PomodoroStatus.focusing || PomodoroStatus.breaking => state.status,
+      PomodoroStatus.paused => state.previousStatus,
+      _ => null,
+    };
+    if (stage != null) {
+      _skipStage(stage);
+    }
   }
 
   void end() {
-    _timer?.cancel();
-    _stageStartedAt = null;
+    if (state.status == PomodoroStatus.idle ||
+        state.status == PomodoroStatus.finished) {
+      return;
+    }
+    _cancelStage();
     _emit(
       state.copyWith(
         status: PomodoroStatus.finished,
@@ -695,35 +837,121 @@ class PomodoroController {
     );
   }
 
-  void _beginStage(PomodoroStatus status, Duration duration) {
-    _timer?.cancel();
-    _stageStartedAt = _now();
-    _emit(PomodoroState(status: status, remaining: duration));
-    _timer = Timer(duration, () {
-      if (status == PomodoroStatus.focusing) {
-        _completeFocusStage();
-      } else {
-        _completeBreakStage();
-      }
-    });
-  }
-
-  Future<void> _completeFocusStage() async {
-    await _store.addFocusSession(_now(), config.focusDuration);
-    if (config.breakDuration == Duration.zero) {
-      _completeBreakStage();
-      return;
+  void setConfig(PomodoroConfig config) {
+    if (state.status == PomodoroStatus.focusing ||
+        state.status == PomodoroStatus.breaking ||
+        state.status == PomodoroStatus.paused) {
+      throw const StudyRoomError(
+        'Cannot change pomodoro config during an active stage',
+        code: 'pomodoro_active',
+      );
     }
-    _beginStage(PomodoroStatus.breaking, config.breakDuration);
-  }
-
-  void _completeBreakStage() {
-    _timer?.cancel();
-    _stageStartedAt = null;
+    _cancelStage();
+    _config = config;
     _emit(PomodoroState.initial(config));
   }
 
+  void _beginStage(PomodoroStatus status, Duration duration) {
+    _cancelStage();
+    final generation = _stageGeneration;
+    _completing = false;
+    _stageEndsAt = _now().add(duration);
+    _emit(PomodoroState(status: status, remaining: duration));
+    _ticker = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (generation != _stageGeneration || _disposed) {
+        return;
+      }
+      final remaining = _remainingNow();
+      _emit(state.copyWith(remaining: remaining));
+      if (remaining <= Duration.zero) {
+        unawaited(_completeStage(generation, status));
+      }
+    });
+    _completionTimer = Timer(
+      duration,
+      () => unawaited(_completeStage(generation, status)),
+    );
+  }
+
+  Future<void> _completeStage(int generation, PomodoroStatus stage) async {
+    if (_disposed || generation != _stageGeneration || _completing) {
+      return;
+    }
+    _completing = true;
+    _ticker?.cancel();
+    _completionTimer?.cancel();
+    _stageEndsAt = null;
+    _emit(state.copyWith(remaining: Duration.zero));
+
+    if (stage == PomodoroStatus.focusing) {
+      try {
+        await _store.addFocusSession(_now(), config.focusDuration);
+      } catch (error, stackTrace) {
+        if (!_disposed && generation == _stageGeneration) {
+          _emit(
+            state.copyWith(
+              status: PomodoroStatus.finished,
+              remaining: Duration.zero,
+              clearPreviousStatus: true,
+            ),
+          );
+          if (!_states.isClosed) {
+            _states.addError(error, stackTrace);
+          }
+        }
+        return;
+      }
+      if (_disposed || generation != _stageGeneration) {
+        return;
+      }
+      if (config.breakDuration > Duration.zero) {
+        _beginStage(PomodoroStatus.breaking, config.breakDuration);
+      } else {
+        _resetToIdle();
+      }
+      return;
+    }
+    _resetToIdle();
+  }
+
+  void _skipStage(PomodoroStatus stage) {
+    _cancelStage();
+    if (stage == PomodoroStatus.focusing &&
+        config.breakDuration > Duration.zero) {
+      _beginStage(PomodoroStatus.breaking, config.breakDuration);
+    } else {
+      _resetToIdle();
+    }
+  }
+
+  void _resetToIdle() {
+    _cancelStage();
+    _emit(PomodoroState.initial(config));
+  }
+
+  Duration _remainingNow() {
+    final endsAt = _stageEndsAt;
+    if (endsAt == null) {
+      return state.remaining;
+    }
+    final remaining = endsAt.difference(_now());
+    return remaining > Duration.zero ? remaining : Duration.zero;
+  }
+
+  void _cancelStage() {
+    _stageGeneration += 1;
+    _ticker?.cancel();
+    _completionTimer?.cancel();
+    _ticker = null;
+    _completionTimer = null;
+    _stageEndsAt = null;
+    _completing = false;
+  }
+
   void _emit(PomodoroState next) {
+    if (_disposed) {
+      return;
+    }
     state = next;
     if (!_states.isClosed) {
       _states.add(next);
@@ -731,7 +959,11 @@ class PomodoroController {
   }
 
   void dispose() {
-    _timer?.cancel();
+    if (_disposed) {
+      return;
+    }
+    _cancelStage();
+    _disposed = true;
     _states.close();
   }
 }
@@ -788,6 +1020,14 @@ class StudyTaskRecord {
   final String title;
   final bool completed;
 
+  StudyTaskRecord copyWith({String? id, String? title, bool? completed}) {
+    return StudyTaskRecord(
+      id: id ?? this.id,
+      title: title ?? this.title,
+      completed: completed ?? this.completed,
+    );
+  }
+
   Map<String, dynamic> toJson() => {
     'id': id,
     'title': title,
@@ -801,6 +1041,93 @@ class StudyTaskRecord {
       completed: json['completed'] as bool? ?? false,
     );
   }
+}
+
+class StudyFocusSettings {
+  factory StudyFocusSettings({
+    String? soundTrackId,
+    double soundVolume = 0.5,
+    String? backgroundId,
+    double backgroundMaskOpacity = 0.25,
+    String? desktopSection,
+  }) {
+    return StudyFocusSettings._(
+      soundTrackId: soundTrackId,
+      soundVolume: soundVolume.clamp(0.0, 1.0).toDouble(),
+      backgroundId: backgroundId,
+      backgroundMaskOpacity: backgroundMaskOpacity.clamp(0.0, 0.85).toDouble(),
+      desktopSection: desktopSection,
+    );
+  }
+
+  const StudyFocusSettings._({
+    required this.soundTrackId,
+    required this.soundVolume,
+    required this.backgroundId,
+    required this.backgroundMaskOpacity,
+    required this.desktopSection,
+  });
+
+  final String? soundTrackId;
+  final double soundVolume;
+  final String? backgroundId;
+  final double backgroundMaskOpacity;
+  final String? desktopSection;
+
+  StudyFocusSettings copyWith({
+    String? soundTrackId,
+    double? soundVolume,
+    String? backgroundId,
+    double? backgroundMaskOpacity,
+    String? desktopSection,
+    bool clearSoundTrackId = false,
+    bool clearBackgroundId = false,
+    bool clearDesktopSection = false,
+  }) {
+    return StudyFocusSettings(
+      soundTrackId: clearSoundTrackId
+          ? null
+          : soundTrackId ?? this.soundTrackId,
+      soundVolume: soundVolume ?? this.soundVolume,
+      backgroundId: clearBackgroundId
+          ? null
+          : backgroundId ?? this.backgroundId,
+      backgroundMaskOpacity:
+          backgroundMaskOpacity ?? this.backgroundMaskOpacity,
+      desktopSection: clearDesktopSection
+          ? null
+          : desktopSection ?? this.desktopSection,
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+    'soundTrackId': soundTrackId,
+    'soundVolume': soundVolume,
+    'backgroundId': backgroundId,
+    'backgroundMaskOpacity': backgroundMaskOpacity,
+    'desktopSection': desktopSection,
+  };
+
+  factory StudyFocusSettings.fromJson(Map<String, dynamic> json) {
+    return StudyFocusSettings(
+      soundTrackId: json['soundTrackId'] as String?,
+      soundVolume: (json['soundVolume'] as num?)?.toDouble() ?? 0.5,
+      backgroundId: json['backgroundId'] as String?,
+      backgroundMaskOpacity:
+          (json['backgroundMaskOpacity'] as num?)?.toDouble() ?? 0.25,
+      desktopSection: json['desktopSection'] as String?,
+    );
+  }
+}
+
+enum StudyStoreChangeKind { goal, dayRecord, tasks, settings }
+
+class StudyStoreChange {
+  StudyStoreChange(this.kind, {DateTime? date})
+    : date = date == null ? null : _dateOnly(date);
+
+  final StudyStoreChangeKind kind;
+  final DateTime? date;
 }
 
 class StudyDayRecord {
@@ -884,6 +1211,8 @@ class StudyReport {
 }
 
 abstract class StudyStore {
+  Stream<StudyStoreChange> get changes;
+
   Future<TodayGoal> loadTodayGoal(DateTime date);
 
   Future<void> saveTodayGoal(DateTime date, TodayGoal goal);
@@ -906,12 +1235,23 @@ abstract class StudyStore {
   Future<List<StudyTaskRecord>> loadTaskRecords(DateTime date);
 
   Future<void> saveTaskRecord(DateTime date, StudyTaskRecord task);
+
+  Future<void> deleteTaskRecord(DateTime date, String taskId);
+
+  Future<StudyFocusSettings> loadSettings();
+
+  Future<void> saveSettings(StudyFocusSettings settings);
 }
 
 class MemoryStudyStore implements StudyStore {
   final _goals = <String, TodayGoal>{};
   final _records = <String, StudyDayRecord>{};
   final _tasks = <String, List<StudyTaskRecord>>{};
+  final _changes = StreamController<StudyStoreChange>.broadcast(sync: true);
+  var _settings = StudyFocusSettings();
+
+  @override
+  Stream<StudyStoreChange> get changes => _changes.stream;
 
   @override
   Future<TodayGoal> loadTodayGoal(DateTime date) async {
@@ -921,6 +1261,7 @@ class MemoryStudyStore implements StudyStore {
   @override
   Future<void> saveTodayGoal(DateTime date, TodayGoal goal) async {
     _goals[_dateKey(date)] = goal;
+    _changes.add(StudyStoreChange(StudyStoreChangeKind.goal, date: date));
   }
 
   @override
@@ -948,6 +1289,9 @@ class MemoryStudyStore implements StudyStore {
   Future<void> saveDayRecord(StudyDayRecord record) async {
     final normalized = record.copyWith(date: _dateOnly(record.date));
     _records[_dateKey(normalized.date)] = normalized;
+    _changes.add(
+      StudyStoreChange(StudyStoreChangeKind.dayRecord, date: normalized.date),
+    );
   }
 
   @override
@@ -981,6 +1325,25 @@ class MemoryStudyStore implements StudyStore {
       tasks[index] = task;
     }
     _tasks[key] = tasks;
+    _changes.add(StudyStoreChange(StudyStoreChangeKind.tasks, date: date));
+  }
+
+  @override
+  Future<void> deleteTaskRecord(DateTime date, String taskId) async {
+    final key = _dateKey(date);
+    final tasks = List<StudyTaskRecord>.of(_tasks[key] ?? const []);
+    tasks.removeWhere((task) => task.id == taskId);
+    _tasks[key] = tasks;
+    _changes.add(StudyStoreChange(StudyStoreChangeKind.tasks, date: date));
+  }
+
+  @override
+  Future<StudyFocusSettings> loadSettings() async => _settings;
+
+  @override
+  Future<void> saveSettings(StudyFocusSettings settings) async {
+    _settings = settings;
+    _changes.add(StudyStoreChange(StudyStoreChangeKind.settings));
   }
 }
 
