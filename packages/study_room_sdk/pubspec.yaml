@@ -1,13 +1,22 @@
 name: study_room_sdk
 description: Core Flutter SDK for integrating online study rooms.
-version: 0.3.0
-publish_to: none
+version: 0.4.0-beta.1
+homepage: https://github.com/qssn70/study_room_sdk
+repository: https://github.com/qssn70/study_room_sdk
+issue_tracker: https://github.com/qssn70/study_room_sdk/issues
+topics:
+  - flutter
+  - realtime
+  - study
+  - collaboration
 
 environment:
   sdk: ^3.8.0
 
+resolution: workspace
+
 dependencies:
-  http: ^1.2.2
+  http: ^1.6.0
   socket_io_client: ^3.0.2
 
 dev_dependencies:

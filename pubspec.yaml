@@ -1,0 +1,8 @@
+name: study_room_workspace
+publish_to: none
+environment:
+  sdk: ^3.8.0
+workspace:
+  - packages/study_room_sdk
+  - packages/study_room_ui
+  - apps/example_flutter
