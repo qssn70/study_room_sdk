@@ -8,5 +8,11 @@ dist/
 .env
 .env.local
 .DS_Store
+*.log
+
+# Local editor and analysis-tool state
+.idea/
+.codegraph/
+apktool_mcp_server_workspace/
 
 AGENTS.md

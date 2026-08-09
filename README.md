@@ -18,14 +18,20 @@ The Flutter packages also include a local-first focus kit that can be embedded w
 - Background sound library with Rain, White noise, Cafe, Library, and Keyboard built-in loops plus custom sources.
 - Color, image, and gradient backgrounds with a readability mask.
 - Optional silent companion list based on existing `StudyRoom.members` and `PresenceStatus`.
+- A four-page desktop workspace for focus, analytics, 30-day history/tasks, and settings.
+- User-scoped persistence for tasks, sound/volume, background/mask, and desktop navigation.
 
 Use `StudyFocusKitView` for the complete experience, or compose `PomodoroTimerView`, `TodayGoalView`, `StudyStatsView`, `StudyAnalyticsView`, `StudyReportView`, `BackgroundSoundView`, `StudyBackgroundLayer`, and `SilentCompanionList`.
 
-`StudyFocusKitView` includes the three visual styles from `docs/UI` and defaults to the recommended immersive dock layout:
+`StudyFocusKitView` includes the three visual styles documented in
+[`docs/ui-design`](docs/ui-design/) and defaults to the recommended immersive
+dock layout:
 
 ```dart
 StudyFocusKitView(
   visualStyle: StudyFocusVisualStyle.immersiveDock,
+  currentUserId: currentUser.id,
+  localStorageNamespace: 'my-app',
 )
 ```
 
@@ -54,6 +60,8 @@ Downstream apps can switch freely between:
 
 ```sh
 docker compose up --build
+cd server && npm ci
+cd ..
 cd packages/study_room_sdk && dart test
 cd ../study_room_ui && flutter test
 cd ../../apps/example_flutter && flutter test
@@ -62,10 +70,17 @@ cd ../../server && npm test
 
 The reference API listens on `http://localhost:3000`. OpenAPI docs are served from `/docs/openapi`.
 
+Version 0.3 requires expiring HS256 JWTs for both REST and Socket.IO. It adds
+multi-room realtime subscriptions, room-aware member events, chat history,
+and `online`/`focusing`/`idle`/`away`/`offline` presence aggregation. Local
+focus data is isolated by `localStorageNamespace` and `currentUserId`; an
+empty user id uses a separate guest scope.
+
 ## License Layout
 
 - Flutter SDK and UI packages are intended for Apache-2.0 distribution.
 - The reference backend in `server/` follows the repository GPL-3.0 license.
 - Commercial/private backend licensing can be handled separately.
 
-See `docs/getting-started.md` for integration details.
+See the [documentation index](docs/README.md) for integration details, API
+contracts, deployment guidance, realtime events, and UI design notes.
