@@ -35,6 +35,7 @@ class StudyRoomExampleHome extends StatefulWidget {
 
 class _StudyRoomExampleHomeState extends State<StudyRoomExampleHome> {
   var _style = StudyFocusVisualStyle.immersiveDock;
+  final _store = MemoryStudyStore();
 
   @override
   Widget build(BuildContext context) {
@@ -46,7 +47,7 @@ class _StudyRoomExampleHomeState extends State<StudyRoomExampleHome> {
         return Stack(
           children: [
             StudyFocusKitView(
-              store: MemoryStudyStore(),
+              store: _store,
               currentUserId: 'demo-user',
               visualStyle: _style,
               background: widget.background ?? studyFocusDefaultBackground,

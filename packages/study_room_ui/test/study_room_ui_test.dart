@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -220,6 +222,390 @@ void main() {
     );
     expect(sidebarSize.width, inInclusiveRange(340, 420));
   });
+
+  testWidgets('desktop navigation exposes four pages and controlled builder', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1600, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    StudyFocusDesktopSection? requested;
+    Widget pageBuilder(
+      BuildContext context,
+      StudyFocusDesktopSection section,
+      Widget defaultPage,
+    ) => KeyedSubtree(
+      key: Key('desktop_page_${section.name}'),
+      child: defaultPage,
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: StudyFocusKitView(
+          store: MemoryStudyStore(),
+          desktopPageBuilder: pageBuilder,
+          background: _testBackground,
+          soundPlayer: FakeSoundPlayer(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('desktop_page_focus')), findsOneWidget);
+
+    for (final section in const [
+      (label: '数据统计', value: StudyFocusDesktopSection.analytics),
+      (label: '历史记录', value: StudyFocusDesktopSection.history),
+      (label: '设置', value: StudyFocusDesktopSection.settings),
+      (label: '专注', value: StudyFocusDesktopSection.focus),
+    ]) {
+      await tester.tap(find.text(section.label).first);
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(Key('desktop_page_${section.value.name}')),
+        findsOneWidget,
+      );
+    }
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: StudyFocusKitView(
+          store: MemoryStudyStore(),
+          desktopSection: StudyFocusDesktopSection.analytics,
+          onDesktopSectionChanged: (section) => requested = section,
+          desktopPageBuilder: pageBuilder,
+          background: _testBackground,
+          soundPlayer: FakeSoundPlayer(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('desktop_page_analytics')), findsOneWidget);
+    await tester.tap(find.text('历史记录').first);
+    await tester.pumpAndSettle();
+    expect(requested, StudyFocusDesktopSection.history);
+    expect(find.byKey(const Key('desktop_page_analytics')), findsOneWidget);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: StudyFocusKitView(
+          store: MemoryStudyStore(),
+          desktopSection: StudyFocusDesktopSection.history,
+          desktopPageBuilder: pageBuilder,
+          background: _testBackground,
+          soundPlayer: FakeSoundPlayer(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('desktop_page_history')), findsOneWidget);
+  });
+
+  testWidgets('desktop history creates edits completes and deletes tasks', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1600, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final store = MemoryStudyStore();
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: StudyFocusKitView(
+          store: store,
+          initialDesktopSection: StudyFocusDesktopSection.history,
+          taskEditor: (context, date, existing) async => existing == null
+              ? const StudyTaskRecord(
+                  id: 'task-1',
+                  title: 'Draft docs',
+                  completed: false,
+                )
+              : existing.copyWith(title: 'Ship docs'),
+          background: _testBackground,
+          soundPlayer: FakeSoundPlayer(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('新建任务').first);
+    await tester.pumpAndSettle();
+    expect(find.text('Draft docs'), findsOneWidget);
+
+    final taskTile = find.byKey(const Key('desktop_task_task-1'));
+    await tester.tap(
+      find.descendant(of: taskTile, matching: find.byType(Checkbox)),
+    );
+    await tester.pumpAndSettle();
+    expect(
+      (await store.loadTaskRecords(DateTime.now())).single.completed,
+      isTrue,
+    );
+
+    await tester.tap(
+      find.descendant(of: taskTile, matching: find.byIcon(Icons.edit)),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('Ship docs'), findsOneWidget);
+
+    await tester.tap(
+      find.descendant(of: taskTile, matching: find.byIcon(Icons.delete)),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(FilledButton, '删除'));
+    await tester.pumpAndSettle();
+    expect(await store.loadTaskRecords(DateTime.now()), isEmpty);
+  });
+
+  testWidgets('default desktop task editor rejects an empty title', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1600, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final store = MemoryStudyStore();
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: StudyFocusKitView(
+          store: store,
+          initialDesktopSection: StudyFocusDesktopSection.history,
+          background: _testBackground,
+          soundPlayer: FakeSoundPlayer(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('新建任务').first);
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(FilledButton, '保存'));
+    await tester.pump();
+    expect(find.text('任务名称不能为空'), findsOneWidget);
+
+    await tester.enterText(find.byKey(const Key('study_task_title')), 'Read');
+    await tester.tap(find.widgetWithText(FilledButton, '保存'));
+    await tester.pumpAndSettle();
+    expect(find.text('Read'), findsOneWidget);
+    expect((await store.loadTaskRecords(DateTime.now())).single.title, 'Read');
+  });
+
+  testWidgets('desktop goals and statistics react to store changes', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1600, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final store = MemoryStudyStore();
+    final date = DateTime(2026, 6, 19);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: StudyFocusKitView(
+          store: store,
+          date: date,
+          background: _testBackground,
+          soundPlayer: FakeSoundPlayer(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.textContaining('番茄进度: 0/4'), findsOneWidget);
+    expect(find.text('0个'), findsOneWidget);
+
+    await store.addFocusSession(date, const Duration(minutes: 25));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('番茄进度: 1/4'), findsOneWidget);
+    expect(find.text('1个'), findsOneWidget);
+  });
+
+  testWidgets(
+    'desktop presets update duration estimates and disable while active',
+    (tester) async {
+      tester.view.physicalSize = const Size(1600, 900);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: StudyFocusKitView(
+            store: MemoryStudyStore(),
+            background: _testBackground,
+            soundPlayer: FakeSoundPlayer(),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(find.textContaining('预计还需 100 分钟'), findsOneWidget);
+
+      await tester.tap(find.text('50 / 10 分钟'));
+      await tester.pump();
+      expect(find.text('50:00'), findsOneWidget);
+      expect(find.textContaining('预计还需 200 分钟'), findsOneWidget);
+
+      await tester.tap(find.byIcon(Icons.play_arrow).first);
+      await tester.pump();
+      await tester.tap(find.text('25 / 5 分钟'));
+      await tester.pump();
+      expect(find.text('50:00'), findsOneWidget);
+      await tester.pumpWidget(const SizedBox.shrink());
+    },
+  );
+
+  testWidgets('desktop sound cards play pause and switch shared playback', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1600, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final player = FakeSoundPlayer();
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: StudyFocusKitView(
+          store: MemoryStudyStore(),
+          background: _testBackground,
+          soundPlayer: player,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('desktop_sound_Rain')));
+    await tester.pump();
+    expect(player.playedTrackIds, ['rain']);
+    await tester.tap(find.byKey(const Key('desktop_sound_Rain')));
+    await tester.pump();
+    expect(player.pauseCount, 1);
+    await tester.tap(find.byKey(const Key('desktop_sound_Cafe')));
+    await tester.pump();
+    expect(player.playedTrackIds, ['rain', 'cafe']);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    expect(player.disposed, isFalse);
+  });
+
+  testWidgets('scoped settings restore without automatically playing audio', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1600, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    SharedPreferences.setMockInitialValues({});
+    final preferences = await SharedPreferences.getInstance();
+    final scope = StudyStorageScope.user(
+      userId: 'user-1',
+      namespace: 'tenant-a',
+    );
+    await SharedPreferencesStudyStore(preferences, scope: scope).saveSettings(
+      StudyFocusSettings(
+        soundTrackId: 'cafe',
+        soundVolume: 0.7,
+        backgroundId: 'forest',
+        backgroundMaskOpacity: 0.4,
+        desktopSection: 'settings',
+      ),
+    );
+    final player = FakeSoundPlayer();
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: StudyFocusKitView(
+          currentUserId: 'user-1',
+          localStorageNamespace: 'tenant-a',
+          background: _testBackground,
+          soundPlayer: player,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(
+      tester.widget<ChoiceChip>(find.widgetWithText(ChoiceChip, '森林')).selected,
+      isTrue,
+    );
+    expect(
+      tester
+          .widget<ChoiceChip>(find.widgetWithText(ChoiceChip, 'Cafe'))
+          .selected,
+      isTrue,
+    );
+    expect(
+      tester
+          .widget<Slider>(find.byKey(const Key('desktop_background_mask')))
+          .value,
+      0.4,
+    );
+    expect(player.playedTrack, isNull);
+    expect(player.volume, 0.5);
+  });
+
+  testWidgets(
+    'presence follows timer and application lifecycle without duplicates',
+    (tester) async {
+      tester.view.physicalSize = const Size(390, 844);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      final updates = <PresenceStatus>[];
+      Object? reportedError;
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: StudyFocusKitView(
+            store: MemoryStudyStore(),
+            background: _testBackground,
+            soundPlayer: FakeSoundPlayer(),
+            onPresenceChanged: (status) async {
+              updates.add(status);
+              if (status == PresenceStatus.focusing) {
+                throw StateError('presence failed');
+              }
+            },
+            onPresenceError: (error, _) => reportedError = error,
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(updates, [PresenceStatus.idle]);
+
+      await tester.tap(find.byIcon(Icons.play_arrow).first);
+      await tester.pump();
+      expect(updates.last, PresenceStatus.focusing);
+      expect(reportedError, isA<StateError>());
+      await tester.tap(find.byIcon(Icons.pause).first);
+      await tester.pump();
+
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+      await tester.pump();
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
+      await tester.pump();
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+      await tester.pump();
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
+      await tester.pump();
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+      await tester.pump();
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+      await tester.pump();
+
+      expect(updates, [
+        PresenceStatus.idle,
+        PresenceStatus.focusing,
+        PresenceStatus.idle,
+        PresenceStatus.away,
+        PresenceStatus.idle,
+      ]);
+      await tester.pumpWidget(const SizedBox.shrink());
+    },
+  );
 
   testWidgets('StudyFocusKitView reserves desktop shell for wide landscape', (
     tester,
@@ -452,6 +838,337 @@ void main() {
     expect(find.text('Write notes'), findsOneWidget);
   });
 
+  testWidgets('StudyFocusKitView presets, resume, and skip drive the timer', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final store = MemoryStudyStore();
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: StudyFocusKitView(
+          store: store,
+          background: _testBackground,
+          soundPlayer: FakeSoundPlayer(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('50/10'));
+    await tester.pump();
+    expect(find.text('50:00'), findsOneWidget);
+
+    await tester.tap(find.byIcon(Icons.play_arrow));
+    await tester.pump();
+    expect(find.text('专注中'), findsOneWidget);
+    await tester.tap(find.byIcon(Icons.pause));
+    await tester.pump();
+    expect(find.text('已暂停'), findsOneWidget);
+    await tester.tap(find.byIcon(Icons.play_arrow));
+    await tester.pump();
+    expect(find.text('专注中'), findsOneWidget);
+
+    await tester.tap(find.text('跳过'));
+    await tester.pump();
+    expect(find.text('休息中'), findsOneWidget);
+    expect(find.text('10:00'), findsOneWidget);
+    expect((await store.loadDayRecord(DateTime.now())).pomodoroCount, 0);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets('custom pomodoro preset validates and applies durations', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: StudyFocusKitView(
+          store: MemoryStudyStore(),
+          background: _testBackground,
+          soundPlayer: FakeSoundPlayer(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('自定义'));
+    await tester.pumpAndSettle();
+
+    await tester.enterText(
+      find.byKey(const Key('pomodoro_custom_focus')),
+      '45',
+    );
+    await tester.enterText(find.byKey(const Key('pomodoro_custom_break')), '0');
+    await tester.tap(find.text('应用'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('45:00'), findsOneWidget);
+  });
+
+  testWidgets('PomodoroTimerView renders deadline-based ticks', (tester) async {
+    var now = DateTime(2026, 6, 19, 10);
+    final controller = PomodoroController(
+      store: MemoryStudyStore(),
+      config: PomodoroConfig.custom(
+        focusDuration: const Duration(seconds: 3),
+        breakDuration: Duration.zero,
+      ),
+      now: () => now,
+    );
+    await tester.pumpWidget(
+      MaterialApp(home: PomodoroTimerView(controller: controller)),
+    );
+
+    await tester.tap(find.byIcon(Icons.play_arrow));
+    now = now.add(const Duration(seconds: 1));
+    await tester.pump(const Duration(seconds: 1));
+    expect(find.text('00:02'), findsOneWidget);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    controller.dispose();
+  });
+
+  test(
+    'SharedPreferencesStudyStore migrates legacy data to only one user',
+    () async {
+      final date = DateTime(2026, 6, 19);
+      SharedPreferences.setMockInitialValues({
+        'study_focus:goal:2026-06-19': jsonEncode(
+          const TodayGoal(text: 'Legacy goal').toJson(),
+        ),
+      });
+      final preferences = await SharedPreferences.getInstance();
+      final guest = SharedPreferencesStudyStore(
+        preferences,
+        scope: StudyStorageScope.guest(namespace: 'tenant-a'),
+      );
+      expect((await guest.loadTodayGoal(date)).text, isEmpty);
+      expect(preferences.containsKey('study_focus:goal:2026-06-19'), isTrue);
+
+      final firstScope = StudyStorageScope.user(
+        userId: 'user:one',
+        namespace: 'tenant-a',
+      );
+      await SharedPreferencesStudyStore.migrateLegacyData(
+        preferences,
+        scope: firstScope,
+      );
+      final first = SharedPreferencesStudyStore(preferences, scope: firstScope);
+      expect((await first.loadTodayGoal(date)).text, 'Legacy goal');
+      expect(preferences.containsKey('study_focus:goal:2026-06-19'), isFalse);
+
+      final secondScope = StudyStorageScope.user(
+        userId: 'user:two',
+        namespace: 'tenant-a',
+      );
+      await SharedPreferencesStudyStore.migrateLegacyData(
+        preferences,
+        scope: secondScope,
+      );
+      final second = SharedPreferencesStudyStore(
+        preferences,
+        scope: secondScope,
+      );
+      expect((await second.loadTodayGoal(date)).text, isEmpty);
+
+      final otherNamespace = SharedPreferencesStudyStore(
+        preferences,
+        scope: StudyStorageScope.user(
+          userId: 'user:one',
+          namespace: 'tenant-b',
+        ),
+      );
+      expect((await otherNamespace.loadTodayGoal(date)).text, isEmpty);
+    },
+  );
+
+  test(
+    'SharedPreferencesStudyStore migration is idempotent and keeps target data',
+    () async {
+      final date = DateTime(2026, 6, 19);
+      final scope = StudyStorageScope.user(
+        userId: 'user-1',
+        namespace: 'target-priority',
+      );
+      final targetKey = '${scope.storagePrefix}:goal:2026-06-19';
+      SharedPreferences.setMockInitialValues({
+        'study_focus:goal:2026-06-19': jsonEncode(
+          const TodayGoal(text: 'Legacy goal').toJson(),
+        ),
+        targetKey: jsonEncode(const TodayGoal(text: 'Target goal').toJson()),
+      });
+      final preferences = await SharedPreferences.getInstance();
+
+      await SharedPreferencesStudyStore.migrateLegacyData(
+        preferences,
+        scope: scope,
+      );
+      await SharedPreferencesStudyStore.migrateLegacyData(
+        preferences,
+        scope: scope,
+      );
+
+      final store = SharedPreferencesStudyStore(preferences, scope: scope);
+      expect((await store.loadTodayGoal(date)).text, 'Target goal');
+      expect(preferences.containsKey('study_focus:goal:2026-06-19'), isFalse);
+      expect(preferences.getBool(scope.migrationMarker), isTrue);
+    },
+  );
+
+  test(
+    'SharedPreferencesStudyStore migration failure can be retried',
+    () async {
+      final date = DateTime(2026, 6, 19);
+      final scope = StudyStorageScope.user(
+        userId: 'user-1',
+        namespace: 'retry',
+      );
+      final preferences = _FailingMigrationPreferences({
+        'study_focus:goal:2026-06-19': jsonEncode(
+          const TodayGoal(text: 'Retry goal').toJson(),
+        ),
+      });
+
+      await expectLater(
+        SharedPreferencesStudyStore.migrateLegacyData(
+          preferences,
+          scope: scope,
+        ),
+        throwsStateError,
+      );
+      expect(preferences.containsKey('study_focus:goal:2026-06-19'), isTrue);
+      expect(preferences.getBool(scope.migrationMarker), isNot(true));
+
+      await SharedPreferencesStudyStore.migrateLegacyData(
+        preferences,
+        scope: scope,
+      );
+      final store = SharedPreferencesStudyStore(preferences, scope: scope);
+      expect((await store.loadTodayGoal(date)).text, 'Retry goal');
+      expect(preferences.containsKey('study_focus:goal:2026-06-19'), isFalse);
+      expect(preferences.getBool(scope.migrationMarker), isTrue);
+    },
+  );
+
+  test(
+    'SharedPreferencesStudyStore broadcasts only successful writes',
+    () async {
+      final preferences = _FailingMigrationPreferences({});
+      final store = SharedPreferencesStudyStore(
+        preferences,
+        scope: StudyStorageScope.guest(namespace: 'failed-writes'),
+      );
+      final changes = <StudyStoreChange>[];
+      final subscription = store.changes.listen(changes.add);
+
+      await expectLater(
+        store.saveTodayGoal(
+          DateTime(2026, 6, 19),
+          const TodayGoal(text: 'Nope'),
+        ),
+        throwsStateError,
+      );
+      expect(changes, isEmpty);
+      await subscription.cancel();
+    },
+  );
+
+  test('task mutations are serialized across scoped store instances', () async {
+    SharedPreferences.setMockInitialValues({});
+    final preferences = await SharedPreferences.getInstance();
+    final scope = StudyStorageScope.user(
+      userId: 'user-1',
+      namespace: 'concurrent-tasks',
+    );
+    final first = SharedPreferencesStudyStore(preferences, scope: scope);
+    final second = SharedPreferencesStudyStore(preferences, scope: scope);
+    final date = DateTime(2026, 6, 19);
+
+    await Future.wait([
+      first.saveTaskRecord(
+        date,
+        const StudyTaskRecord(id: 'one', title: 'One', completed: false),
+      ),
+      second.saveTaskRecord(
+        date,
+        const StudyTaskRecord(id: 'two', title: 'Two', completed: false),
+      ),
+    ]);
+
+    expect((await first.loadTaskRecords(date)).map((task) => task.id).toSet(), {
+      'one',
+      'two',
+    });
+  });
+
+  test('settings stay isolated by identity and namespace', () async {
+    SharedPreferences.setMockInitialValues({});
+    final preferences = await SharedPreferences.getInstance();
+    final userA = SharedPreferencesStudyStore(
+      preferences,
+      scope: StudyStorageScope.user(userId: 'a', namespace: 'tenant'),
+    );
+    final userB = SharedPreferencesStudyStore(
+      preferences,
+      scope: StudyStorageScope.user(userId: 'b', namespace: 'tenant'),
+    );
+    final guest = SharedPreferencesStudyStore(
+      preferences,
+      scope: StudyStorageScope.guest(namespace: 'tenant'),
+    );
+    final otherNamespace = SharedPreferencesStudyStore(
+      preferences,
+      scope: StudyStorageScope.user(userId: 'a', namespace: 'other'),
+    );
+
+    await userA.saveSettings(StudyFocusSettings(desktopSection: 'history'));
+    expect((await userA.loadSettings()).desktopSection, 'history');
+    expect((await userB.loadSettings()).desktopSection, isNull);
+    expect((await guest.loadSettings()).desktopSection, isNull);
+    expect((await otherNamespace.loadSettings()).desktopSection, isNull);
+  });
+
+  testWidgets('StudyFocusKitView isolates data when the user changes', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({});
+    final date = DateTime(2026, 6, 19);
+
+    Future<void> pumpFor(String userId) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          home: StudyFocusKitView(
+            currentUserId: userId,
+            localStorageNamespace: 'tenant-a',
+            date: date,
+            background: _testBackground,
+            soundPlayer: FakeSoundPlayer(),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+    }
+
+    await pumpFor('user-1');
+    await tester.enterText(
+      find.byKey(const Key('study_focus_goal_text_field')),
+      'Private goal',
+    );
+    await tester.pumpAndSettle();
+
+    await pumpFor('user-2');
+    expect(find.text('Private goal'), findsNothing);
+    await pumpFor('user-1');
+    expect(find.text('Private goal'), findsOneWidget);
+  });
+
   testWidgets('TodayGoalView saves text, target pomodoros, and completion', (
     tester,
   ) async {
@@ -638,17 +1355,22 @@ void main() {
 
 class FakeSoundPlayer implements StudySoundPlayer {
   StudySoundTrack? playedTrack;
+  final playedTrackIds = <String>[];
   var volume = 0.5;
   var paused = false;
+  var pauseCount = 0;
+  var disposed = false;
 
   @override
   Future<void> pause() async {
     paused = true;
+    pauseCount += 1;
   }
 
   @override
   Future<void> play(StudySoundTrack track, {double volume = 0.5}) async {
     playedTrack = track;
+    playedTrackIds.add(track.id);
     this.volume = volume;
     paused = false;
   }
@@ -659,5 +1381,45 @@ class FakeSoundPlayer implements StudySoundPlayer {
   }
 
   @override
-  Future<void> dispose() async {}
+  Future<void> dispose() async {
+    disposed = true;
+  }
+}
+
+class _FailingMigrationPreferences extends Fake implements SharedPreferences {
+  _FailingMigrationPreferences(this.values);
+
+  final Map<String, Object> values;
+  var failNextStringWrite = true;
+
+  @override
+  Set<String> getKeys() => values.keys.toSet();
+
+  @override
+  bool? getBool(String key) => values[key] as bool?;
+
+  @override
+  String? getString(String key) => values[key] as String?;
+
+  @override
+  bool containsKey(String key) => values.containsKey(key);
+
+  @override
+  Future<bool> setString(String key, String value) async {
+    if (failNextStringWrite) {
+      failNextStringWrite = false;
+      return false;
+    }
+    values[key] = value;
+    return true;
+  }
+
+  @override
+  Future<bool> remove(String key) async => values.remove(key) != null;
+
+  @override
+  Future<bool> setBool(String key, bool value) async {
+    values[key] = value;
+    return true;
+  }
 }

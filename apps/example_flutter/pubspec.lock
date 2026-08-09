@@ -475,14 +475,14 @@ packages:
       path: "../../packages/study_room_sdk"
       relative: true
     source: path
-    version: "0.1.0"
+    version: "0.3.0"
   study_room_ui:
     dependency: "direct main"
     description:
       path: "../../packages/study_room_ui"
       relative: true
     source: path
-    version: "0.1.0"
+    version: "0.3.0"
   synchronized:
     dependency: transitive
     description:

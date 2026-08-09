@@ -475,7 +475,7 @@ packages:
       path: "../study_room_sdk"
       relative: true
     source: path
-    version: "0.1.0"
+    version: "0.3.0"
   synchronized:
     dependency: transitive
     description:

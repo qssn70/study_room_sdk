@@ -38,6 +38,50 @@ class StudyRoomCopy {
 
 enum StudyFocusVisualStyle { split, centered, immersiveDock }
 
+enum StudyFocusDesktopSection { focus, analytics, history, settings }
+
+typedef StudyFocusDesktopPageBuilder =
+    Widget Function(
+      BuildContext context,
+      StudyFocusDesktopSection section,
+      Widget defaultPage,
+    );
+
+typedef StudyTaskEditor =
+    Future<StudyTaskRecord?> Function(
+      BuildContext context,
+      DateTime date,
+      StudyTaskRecord? existing,
+    );
+
+class StudyBackgroundOption {
+  const StudyBackgroundOption({
+    required this.id,
+    required this.label,
+    required this.background,
+  });
+
+  final String id;
+  final String label;
+  final StudyBackground background;
+
+  static const builtIns = <StudyBackgroundOption>[
+    StudyBackgroundOption(
+      id: 'midnight',
+      label: '深夜',
+      background: StudyBackground.color(Color(0xFF16231E), maskOpacity: 0.3),
+    ),
+    StudyBackgroundOption(
+      id: 'forest',
+      label: '森林',
+      background: StudyBackground.gradient(
+        colors: [Color(0xFF18392B), Color(0xFF101A2A)],
+        maskOpacity: 0.28,
+      ),
+    ),
+  ];
+}
+
 const studyFocusDefaultBackgroundImageUrl =
     'https://images.unsplash.com/photo-1419242902214-272b3f66ee7a?q=80&w=2000&auto=format&fit=crop';
 
@@ -463,6 +507,15 @@ class StudyFocusKitView extends StatefulWidget {
     this.soundTracks = StudySoundTrack.builtIns,
     this.soundPlayer,
     this.date,
+    this.localStorageNamespace = 'default',
+    this.desktopSection,
+    this.initialDesktopSection = StudyFocusDesktopSection.focus,
+    this.onDesktopSectionChanged,
+    this.desktopPageBuilder,
+    this.taskEditor,
+    this.backgroundOptions = StudyBackgroundOption.builtIns,
+    this.onPresenceChanged,
+    this.onPresenceError,
     super.key,
   });
 
@@ -475,6 +528,15 @@ class StudyFocusKitView extends StatefulWidget {
   final List<StudySoundTrack> soundTracks;
   final StudySoundPlayer? soundPlayer;
   final DateTime? date;
+  final String localStorageNamespace;
+  final StudyFocusDesktopSection? desktopSection;
+  final StudyFocusDesktopSection initialDesktopSection;
+  final ValueChanged<StudyFocusDesktopSection>? onDesktopSectionChanged;
+  final StudyFocusDesktopPageBuilder? desktopPageBuilder;
+  final StudyTaskEditor? taskEditor;
+  final List<StudyBackgroundOption> backgroundOptions;
+  final FutureOr<void> Function(PresenceStatus status)? onPresenceChanged;
+  final void Function(Object error, StackTrace stackTrace)? onPresenceError;
 
   @override
   State<StudyFocusKitView> createState() => _StudyFocusKitViewState();
@@ -482,65 +544,318 @@ class StudyFocusKitView extends StatefulWidget {
 
 enum _FocusDockPanel { stats, sound, members }
 
-class _StudyFocusKitViewState extends State<StudyFocusKitView> {
+class _StudyFocusKitViewState extends State<StudyFocusKitView>
+    with WidgetsBindingObserver {
   StudyStore? _store;
   PomodoroController? _controller;
+  StreamSubscription<StudyStoreChange>? _storeSubscription;
+  StreamSubscription<PomodoroState>? _presenceSubscription;
+  _StudySoundCoordinator? _sound;
   var _storeLoadGeneration = 0;
+  var _dataRevision = 0;
+  var _settingsWrites = 0;
+  Object? _storeLoadError;
   _FocusDockPanel? _activeDockPanel;
+  var _internalDesktopSection = StudyFocusDesktopSection.focus;
+  var _settings = StudyFocusSettings();
+  var _activeBackground = studyFocusDefaultBackground;
+  String _activeBackgroundId = 'default';
+  PresenceStatus? _lastPresence;
+  var _lifecycleAway = false;
 
   DateTime get _date => widget.date ?? DateTime.now();
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _internalDesktopSection = widget.initialDesktopSection;
+    _activeBackground = widget.background;
     _loadStore();
   }
 
   @override
   void didUpdateWidget(covariant StudyFocusKitView oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.store != widget.store) {
+    final automaticScopeChanged =
+        widget.store == null &&
+        (oldWidget.currentUserId != widget.currentUserId ||
+            oldWidget.localStorageNamespace != widget.localStorageNamespace);
+    if (oldWidget.store != widget.store || automaticScopeChanged) {
+      _loadStore();
+    }
+    if (oldWidget.soundPlayer != widget.soundPlayer ||
+        oldWidget.soundTracks != widget.soundTracks ||
+        oldWidget.background != widget.background ||
+        oldWidget.backgroundOptions != widget.backgroundOptions) {
       _loadStore();
     }
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _storeSubscription?.cancel();
+    _presenceSubscription?.cancel();
+    _sound?.dispose();
     _controller?.dispose();
-    widget.soundPlayer?.dispose();
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    switch (state) {
+      case AppLifecycleState.resumed:
+        _lifecycleAway = false;
+        _publishPresenceForController();
+      case AppLifecycleState.inactive ||
+          AppLifecycleState.hidden ||
+          AppLifecycleState.paused ||
+          AppLifecycleState.detached:
+        _lifecycleAway = true;
+        _publishPresence(PresenceStatus.away);
+    }
   }
 
   Future<void> _loadStore() async {
     final generation = ++_storeLoadGeneration;
+    _clearStoreForLoad();
     final providedStore = widget.store;
-    if (providedStore != null) {
-      _setStore(providedStore, notify: _store != null);
-      return;
+    try {
+      StudyStore nextStore;
+      if (providedStore != null) {
+        nextStore = providedStore;
+      } else {
+        final preferences = await SharedPreferences.getInstance();
+        final userId = widget.currentUserId.trim();
+        final scope = userId.isEmpty
+            ? StudyStorageScope.guest(namespace: widget.localStorageNamespace)
+            : StudyStorageScope.user(
+                userId: userId,
+                namespace: widget.localStorageNamespace,
+              );
+        if (!scope.isGuest) {
+          await SharedPreferencesStudyStore.migrateLegacyData(
+            preferences,
+            scope: scope,
+          );
+        }
+        nextStore = SharedPreferencesStudyStore(preferences, scope: scope);
+      }
+      final settings = await nextStore.loadSettings();
+      if (!mounted || generation != _storeLoadGeneration) {
+        return;
+      }
+      _setStore(nextStore, settings);
+    } catch (error) {
+      if (mounted && generation == _storeLoadGeneration) {
+        setState(() => _storeLoadError = error);
+      }
     }
-
-    final preferences = await SharedPreferences.getInstance();
-    if (!mounted || generation != _storeLoadGeneration) {
-      return;
-    }
-    _setStore(SharedPreferencesStudyStore(preferences));
   }
 
-  void _setStore(StudyStore store, {bool notify = true}) {
+  void _clearStoreForLoad() {
     final previousController = _controller;
+    final previousSound = _sound;
+    unawaited(_storeSubscription?.cancel());
+    unawaited(_presenceSubscription?.cancel());
+    _storeSubscription = null;
+    _presenceSubscription = null;
+    void clear() {
+      _store = null;
+      _controller = null;
+      _sound = null;
+      _storeLoadError = null;
+    }
+
+    if (mounted && (_store != null || _storeLoadError != null)) {
+      setState(clear);
+    } else {
+      clear();
+    }
+    previousController?.dispose();
+    previousSound?.dispose();
+  }
+
+  void _setStore(StudyStore store, StudyFocusSettings settings) {
     final nextController = PomodoroController(store: store);
+    final nextSound = _StudySoundCoordinator(
+      tracks: widget.soundTracks,
+      player: widget.soundPlayer,
+      settings: settings,
+      onChanged: _saveSoundSettings,
+      onError: _reportPresenceError,
+    );
+    _settings = settings;
+    _internalDesktopSection = _sectionFromName(settings.desktopSection);
+    _activeBackgroundId = _resolveBackgroundId(settings.backgroundId);
+    _activeBackground = _backgroundForId(
+      _activeBackgroundId,
+    ).withMaskOpacity(settings.backgroundMaskOpacity);
 
     void assign() {
       _store = store;
       _controller = nextController;
+      _sound = nextSound;
+      _storeLoadError = null;
     }
 
-    if (notify && mounted) {
+    if (mounted) {
       setState(assign);
     } else {
       assign();
     }
-    previousController?.dispose();
+    _storeSubscription = store.changes.listen(_handleStoreChange);
+    _presenceSubscription = nextController.states.listen(
+      (_) => _publishPresenceForController(),
+      onError: (Object error, StackTrace stackTrace) {
+        _reportPresenceError(error, stackTrace);
+      },
+    );
+    _publishPresenceForController();
+  }
+
+  void _handleStoreChange(StudyStoreChange change) {
+    if (!mounted) {
+      return;
+    }
+    if (change.kind == StudyStoreChangeKind.settings) {
+      if (_settingsWrites > 0) {
+        setState(() => _dataRevision += 1);
+        return;
+      }
+      unawaited(_reloadSettings());
+      return;
+    }
+    setState(() => _dataRevision += 1);
+  }
+
+  Future<void> _reloadSettings() async {
+    final store = _store;
+    if (store == null) {
+      return;
+    }
+    final settings = await store.loadSettings();
+    if (!mounted || store != _store) {
+      return;
+    }
+    setState(() {
+      _settings = settings;
+      if (widget.desktopSection == null) {
+        _internalDesktopSection = _sectionFromName(settings.desktopSection);
+      }
+      _activeBackgroundId = _resolveBackgroundId(settings.backgroundId);
+      _activeBackground = _backgroundForId(
+        _activeBackgroundId,
+      ).withMaskOpacity(settings.backgroundMaskOpacity);
+      _dataRevision += 1;
+    });
+    _sound?.applySettings(settings);
+  }
+
+  StudyFocusDesktopSection _sectionFromName(String? name) {
+    return StudyFocusDesktopSection.values.firstWhere(
+      (section) => section.name == name,
+      orElse: () => widget.initialDesktopSection,
+    );
+  }
+
+  List<StudyBackgroundOption> get _availableBackgrounds => [
+    StudyBackgroundOption(
+      id: 'default',
+      label: '默认',
+      background: widget.background,
+    ),
+    ...widget.backgroundOptions.where((option) => option.id != 'default'),
+  ];
+
+  String _resolveBackgroundId(String? id) {
+    return _availableBackgrounds.any((option) => option.id == id)
+        ? id!
+        : 'default';
+  }
+
+  StudyBackground _backgroundForId(String id) {
+    return _availableBackgrounds
+        .firstWhere((option) => option.id == id)
+        .background;
+  }
+
+  StudyFocusDesktopSection get _desktopSection =>
+      widget.desktopSection ?? _internalDesktopSection;
+
+  void _selectDesktopSection(StudyFocusDesktopSection section) {
+    widget.onDesktopSectionChanged?.call(section);
+    if (widget.desktopSection != null) {
+      return;
+    }
+    setState(() => _internalDesktopSection = section);
+    unawaited(_saveSettings(_settings.copyWith(desktopSection: section.name)));
+  }
+
+  Future<void> _saveSoundSettings(String? trackId, double volume) {
+    return _saveSettings(
+      _settings.copyWith(soundTrackId: trackId, soundVolume: volume),
+    );
+  }
+
+  Future<void> _selectBackground(String id, double maskOpacity) async {
+    final resolved = _resolveBackgroundId(id);
+    setState(() {
+      _activeBackgroundId = resolved;
+      _activeBackground = _backgroundForId(
+        resolved,
+      ).withMaskOpacity(maskOpacity);
+    });
+    await _saveSettings(
+      _settings.copyWith(
+        backgroundId: resolved,
+        backgroundMaskOpacity: maskOpacity,
+      ),
+    );
+  }
+
+  Future<void> _saveSettings(StudyFocusSettings settings) async {
+    final store = _store;
+    if (store == null) {
+      return;
+    }
+    _settings = settings;
+    _settingsWrites += 1;
+    try {
+      await store.saveSettings(settings);
+    } catch (error, stackTrace) {
+      _reportPresenceError(error, stackTrace);
+    } finally {
+      _settingsWrites -= 1;
+    }
+  }
+
+  void _publishPresenceForController() {
+    final status = _lifecycleAway
+        ? PresenceStatus.away
+        : _controller?.state.status == PomodoroStatus.focusing
+        ? PresenceStatus.focusing
+        : PresenceStatus.idle;
+    _publishPresence(status);
+  }
+
+  void _publishPresence(PresenceStatus status) {
+    final callback = widget.onPresenceChanged;
+    if (callback == null || _lastPresence == status) {
+      return;
+    }
+    _lastPresence = status;
+    Future<void>.sync(() => callback(status)).catchError((
+      Object error,
+      StackTrace stackTrace,
+    ) {
+      _reportPresenceError(error, stackTrace);
+    });
+  }
+
+  void _reportPresenceError(Object error, StackTrace stackTrace) {
+    widget.onPresenceError?.call(error, stackTrace);
   }
 
   @override
@@ -549,14 +864,29 @@ class _StudyFocusKitViewState extends State<StudyFocusKitView> {
     final controller = _controller;
     final members = widget.room?.members ?? const <StudyMember>[];
     return StudyBackgroundLayer(
-      background: widget.background,
+      background: _activeBackground,
       child: Theme(
         data: _visualTheme(context),
         child: Material(
           type: MaterialType.transparency,
           child: SafeArea(
             bottom: widget.visualStyle != StudyFocusVisualStyle.immersiveDock,
-            child: store == null || controller == null
+            child: _storeLoadError != null
+                ? Center(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Text('无法加载本地学习数据'),
+                        const SizedBox(height: 12),
+                        OutlinedButton.icon(
+                          onPressed: _loadStore,
+                          icon: const Icon(Icons.refresh),
+                          label: const Text('重试'),
+                        ),
+                      ],
+                    ),
+                  )
+                : store == null || controller == null
                 ? const Center(child: CircularProgressIndicator())
                 : LayoutBuilder(
                     builder: (context, constraints) {
@@ -570,10 +900,7 @@ class _StudyFocusKitViewState extends State<StudyFocusKitView> {
                       final styleKey = Key(
                         'study_focus_style_${widget.visualStyle.name}_$keySuffix',
                       );
-                      final sound = BackgroundSoundView(
-                        tracks: widget.soundTracks,
-                        soundPlayer: widget.soundPlayer,
-                      );
+                      final sound = _StudySoundControls(coordinator: _sound!);
                       final companionTheme = SilentCompanionTheme(
                         avatarSize: sidePanelLayout ? 32 : 40,
                         focusingColor: _studyFocusAccent,
@@ -608,6 +935,16 @@ class _StudyFocusKitViewState extends State<StudyFocusKitView> {
                                     member.status != PresenceStatus.offline,
                               )
                               .length,
+                          section: _desktopSection,
+                          onSectionChanged: _selectDesktopSection,
+                          pageBuilder: widget.desktopPageBuilder,
+                          taskEditor: widget.taskEditor,
+                          sound: _sound!,
+                          backgrounds: _availableBackgrounds,
+                          activeBackgroundId: _activeBackgroundId,
+                          maskOpacity: _activeBackground.maskOpacity,
+                          onBackgroundChanged: _selectBackground,
+                          dataRevision: _dataRevision,
                         );
                       }
                       if (sidePanelLayout) {
@@ -623,6 +960,7 @@ class _StudyFocusKitViewState extends State<StudyFocusKitView> {
                           members: widget.showCompanions
                               ? companions
                               : const SizedBox.shrink(),
+                          sound: sound,
                         );
                       }
                       return _StudyFocusPortraitShell(
@@ -638,7 +976,7 @@ class _StudyFocusKitViewState extends State<StudyFocusKitView> {
                             ? companions
                             : const SizedBox.shrink(),
                         sound: sound,
-                        background: widget.background,
+                        background: _activeBackground,
                         visualStyle: widget.visualStyle,
                         activePanel: _activeDockPanel,
                         onDockPanelChanged: (panel) {
@@ -774,6 +1112,7 @@ class _StudyFocusLandscapeShell extends StatelessWidget {
     required this.date,
     required this.sizing,
     required this.members,
+    required this.sound,
     super.key,
   });
 
@@ -782,6 +1121,7 @@ class _StudyFocusLandscapeShell extends StatelessWidget {
   final DateTime date;
   final _StudyFocusSizing sizing;
   final Widget members;
+  final Widget sound;
 
   @override
   Widget build(BuildContext context) {
@@ -804,7 +1144,7 @@ class _StudyFocusLandscapeShell extends StatelessWidget {
           child: _LandscapeInfoPanel(
             members: members,
             goal: _StudyFocusGoalCard(store: store, date: date, compact: true),
-            sound: const _PrototypeSoundBar(),
+            sound: sound,
             stats: _PrototypeStatsOverview(store: store, date: date),
           ),
         ),
@@ -821,6 +1161,16 @@ class _StudyFocusDesktopShell extends StatelessWidget {
     required this.sizing,
     required this.members,
     required this.onlineCount,
+    required this.section,
+    required this.onSectionChanged,
+    required this.pageBuilder,
+    required this.taskEditor,
+    required this.sound,
+    required this.backgrounds,
+    required this.activeBackgroundId,
+    required this.maskOpacity,
+    required this.onBackgroundChanged,
+    required this.dataRevision,
     super.key,
   });
 
@@ -830,50 +1180,96 @@ class _StudyFocusDesktopShell extends StatelessWidget {
   final _StudyFocusSizing sizing;
   final Widget members;
   final int onlineCount;
+  final StudyFocusDesktopSection section;
+  final ValueChanged<StudyFocusDesktopSection> onSectionChanged;
+  final StudyFocusDesktopPageBuilder? pageBuilder;
+  final StudyTaskEditor? taskEditor;
+  final _StudySoundCoordinator sound;
+  final List<StudyBackgroundOption> backgrounds;
+  final String activeBackgroundId;
+  final double maskOpacity;
+  final Future<void> Function(String id, double maskOpacity)
+  onBackgroundChanged;
+  final int dataRevision;
 
   @override
   Widget build(BuildContext context) {
+    final defaultPage = switch (section) {
+      StudyFocusDesktopSection.focus => _focusPage(),
+      StudyFocusDesktopSection.analytics => _DesktopAnalyticsPage(
+        key: ValueKey('desktop-analytics-$dataRevision'),
+        store: store,
+        date: date,
+      ),
+      StudyFocusDesktopSection.history => _DesktopHistoryPage(
+        store: store,
+        date: date,
+        taskEditor: taskEditor,
+      ),
+      StudyFocusDesktopSection.settings => _DesktopSettingsPage(
+        sound: sound,
+        backgrounds: backgrounds,
+        activeBackgroundId: activeBackgroundId,
+        maskOpacity: maskOpacity,
+        onBackgroundChanged: onBackgroundChanged,
+      ),
+    };
+    final page =
+        pageBuilder?.call(context, section, defaultPage) ?? defaultPage;
     return Column(
       key: const Key('study_focus_desktop_shell'),
       children: [
-        const _DesktopTopNav(),
+        _DesktopTopNav(
+          section: section,
+          onSectionChanged: onSectionChanged,
+          onNewTask: () => _editStudyTask(
+            context,
+            store: store,
+            date: date,
+            editor: taskEditor,
+          ),
+        ),
+        Expanded(child: page),
+      ],
+    );
+  }
+
+  Widget _focusPage() {
+    return Row(
+      children: [
         Expanded(
-          child: Row(
-            children: [
-              Expanded(
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(56, 30, 56, 34),
-                  child: Column(
-                    children: [
-                      Expanded(
-                        child: Center(
-                          child: _StudyFocusDesktopCore(
-                            controller: controller,
-                            sizing: sizing,
-                          ),
-                        ),
-                      ),
-                      ConstrainedBox(
-                        constraints: const BoxConstraints(maxWidth: 720),
-                        child: _StudyFocusDesktopGoalCard(
-                          store: store,
-                          date: date,
-                        ),
-                      ),
-                    ],
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(56, 30, 56, 34),
+            child: Column(
+              children: [
+                Expanded(
+                  child: Center(
+                    child: _StudyFocusDesktopCore(
+                      controller: controller,
+                      sizing: sizing,
+                    ),
                   ),
                 ),
-              ),
-              SizedBox(
-                key: const Key('study_focus_desktop_sidebar'),
-                width: 380,
-                child: _DesktopSidePanel(
-                  members: members,
-                  onlineCount: onlineCount,
-                  stats: _PrototypeStatsOverview(store: store, date: date),
+                ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 720),
+                  child: _StudyFocusDesktopGoalCard(
+                    store: store,
+                    date: date,
+                    controller: controller,
+                  ),
                 ),
-              ),
-            ],
+              ],
+            ),
+          ),
+        ),
+        SizedBox(
+          key: const Key('study_focus_desktop_sidebar'),
+          width: 380,
+          child: _DesktopSidePanel(
+            members: members,
+            onlineCount: onlineCount,
+            stats: _PrototypeStatsOverview(store: store, date: date),
+            sound: sound,
           ),
         ),
       ],
@@ -881,8 +1277,39 @@ class _StudyFocusDesktopShell extends StatelessWidget {
   }
 }
 
-class _DesktopTopNav extends StatelessWidget {
-  const _DesktopTopNav();
+class _DesktopTopNav extends StatefulWidget {
+  const _DesktopTopNav({
+    required this.section,
+    required this.onSectionChanged,
+    required this.onNewTask,
+  });
+
+  final StudyFocusDesktopSection section;
+  final ValueChanged<StudyFocusDesktopSection> onSectionChanged;
+  final VoidCallback onNewTask;
+
+  @override
+  State<_DesktopTopNav> createState() => _DesktopTopNavState();
+}
+
+class _DesktopTopNavState extends State<_DesktopTopNav> {
+  Timer? _clockTimer;
+
+  @override
+  void initState() {
+    super.initState();
+    _clockTimer = Timer.periodic(const Duration(minutes: 1), (_) {
+      if (mounted) {
+        setState(() {});
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _clockTimer?.cancel();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -916,10 +1343,30 @@ class _DesktopTopNav extends StatelessWidget {
                 ),
               ),
               const SizedBox(width: 36),
-              const _DesktopNavItem('专注', selected: true),
-              const _DesktopNavItem('数据统计'),
-              const _DesktopNavItem('历史记录'),
-              const _DesktopNavItem('设置'),
+              _DesktopNavItem(
+                '专注',
+                selected: widget.section == StudyFocusDesktopSection.focus,
+                onPressed: () =>
+                    widget.onSectionChanged(StudyFocusDesktopSection.focus),
+              ),
+              _DesktopNavItem(
+                '数据统计',
+                selected: widget.section == StudyFocusDesktopSection.analytics,
+                onPressed: () =>
+                    widget.onSectionChanged(StudyFocusDesktopSection.analytics),
+              ),
+              _DesktopNavItem(
+                '历史记录',
+                selected: widget.section == StudyFocusDesktopSection.history,
+                onPressed: () =>
+                    widget.onSectionChanged(StudyFocusDesktopSection.history),
+              ),
+              _DesktopNavItem(
+                '设置',
+                selected: widget.section == StudyFocusDesktopSection.settings,
+                onPressed: () =>
+                    widget.onSectionChanged(StudyFocusDesktopSection.settings),
+              ),
               const Spacer(),
               Text(
                 _formatClock(TimeOfDay.now()),
@@ -930,7 +1377,7 @@ class _DesktopTopNav extends StatelessWidget {
               ),
               const SizedBox(width: 18),
               FilledButton.icon(
-                onPressed: () {},
+                onPressed: widget.onNewTask,
                 icon: const Icon(Icons.add, size: 18),
                 label: const Text('新建任务'),
                 style: FilledButton.styleFrom(
@@ -960,20 +1407,28 @@ class _DesktopTopNav extends StatelessWidget {
 }
 
 class _DesktopNavItem extends StatelessWidget {
-  const _DesktopNavItem(this.label, {this.selected = false});
+  const _DesktopNavItem(
+    this.label, {
+    required this.onPressed,
+    this.selected = false,
+  });
 
   final String label;
   final bool selected;
+  final VoidCallback onPressed;
 
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.only(right: 26),
-      child: Text(
-        label,
-        style: Theme.of(context).textTheme.labelLarge?.copyWith(
-          color: Colors.white.withValues(alpha: selected ? 0.96 : 0.58),
-          fontWeight: selected ? FontWeight.w800 : FontWeight.w600,
+      padding: const EdgeInsets.only(right: 12),
+      child: TextButton(
+        onPressed: onPressed,
+        child: Text(
+          label,
+          style: Theme.of(context).textTheme.labelLarge?.copyWith(
+            color: Colors.white.withValues(alpha: selected ? 0.96 : 0.58),
+            fontWeight: selected ? FontWeight.w800 : FontWeight.w600,
+          ),
         ),
       ),
     );
@@ -997,7 +1452,7 @@ class _StudyFocusDesktopCore extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          const Center(child: _DesktopPresetBar()),
+          Center(child: _DesktopPresetBar(controller: controller)),
           const SizedBox(height: 34),
           Center(
             child: _VisualPomodoroTimer(
@@ -1015,22 +1470,13 @@ class _StudyFocusDesktopCore extends StatelessWidget {
 }
 
 class _DesktopPresetBar extends StatelessWidget {
-  const _DesktopPresetBar();
+  const _DesktopPresetBar({required this.controller});
+
+  final PomodoroController controller;
 
   @override
   Widget build(BuildContext context) {
-    return _GlassPanel(
-      borderRadius: BorderRadius.circular(999),
-      padding: const EdgeInsets.all(4),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: const [
-          _PresetChip(label: '25 / 5 分钟', selected: true),
-          _PresetChip(label: '50 / 10 分钟'),
-          _PresetChip(label: '自定义时长'),
-        ],
-      ),
-    );
+    return _PresetBar(controller: controller, verbose: true);
   }
 }
 
@@ -1049,6 +1495,8 @@ class _DesktopTimerControls extends StatelessWidget {
         final running =
             status == PomodoroStatus.focusing ||
             status == PomodoroStatus.breaking;
+        final paused = status == PomodoroStatus.paused;
+        final active = running || paused;
         return Row(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
@@ -1060,17 +1508,28 @@ class _DesktopTimerControls extends StatelessWidget {
               child: SizedBox.square(
                 dimension: 68,
                 child: IconButton(
-                  tooltip: running ? '暂停' : '开始',
+                  tooltip: running
+                      ? '暂停'
+                      : paused
+                      ? '继续'
+                      : '开始',
                   icon: Icon(
                     running ? Icons.pause : Icons.play_arrow,
                     size: 30,
                   ),
-                  onPressed: running ? controller.pause : controller.start,
+                  onPressed: running
+                      ? controller.pause
+                      : paused
+                      ? controller.resume
+                      : controller.start,
                 ),
               ),
             ),
             const SizedBox(width: 28),
-            _ControlTextButton(label: '跳至休息', onPressed: controller.resume),
+            _ControlTextButton(
+              label: '跳至休息',
+              onPressed: active ? controller.skip : null,
+            ),
           ],
         );
       },
@@ -1078,92 +1537,420 @@ class _DesktopTimerControls extends StatelessWidget {
   }
 }
 
-class _StudyFocusDesktopGoalCard extends StatelessWidget {
-  const _StudyFocusDesktopGoalCard({required this.store, required this.date});
+class _StudyFocusDesktopGoalCard extends StatefulWidget {
+  const _StudyFocusDesktopGoalCard({
+    required this.store,
+    required this.date,
+    required this.controller,
+  });
+
+  final StudyStore store;
+  final DateTime date;
+  final PomodoroController controller;
+
+  @override
+  State<_StudyFocusDesktopGoalCard> createState() =>
+      _StudyFocusDesktopGoalCardState();
+}
+
+class _StudyFocusDesktopGoalCardState
+    extends State<_StudyFocusDesktopGoalCard> {
+  late Future<(TodayGoal, StudyDayRecord)> _future;
+  StreamSubscription<StudyStoreChange>? _subscription;
+
+  @override
+  void initState() {
+    super.initState();
+    _future = _load();
+    _subscribe();
+  }
+
+  @override
+  void didUpdateWidget(covariant _StudyFocusDesktopGoalCard oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.store != widget.store || oldWidget.date != widget.date) {
+      unawaited(_subscription?.cancel());
+      _future = _load();
+      _subscribe();
+    }
+  }
+
+  @override
+  void dispose() {
+    unawaited(_subscription?.cancel());
+    super.dispose();
+  }
+
+  void _subscribe() {
+    _subscription = widget.store.changes.listen((change) {
+      if (!mounted ||
+          (change.kind != StudyStoreChangeKind.goal &&
+              change.kind != StudyStoreChangeKind.dayRecord) ||
+          (change.date != null &&
+              _dateKey(change.date!) != _dateKey(widget.date))) {
+        return;
+      }
+      setState(() {
+        _future = _load();
+      });
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return StreamBuilder<PomodoroState>(
+      stream: widget.controller.states,
+      initialData: widget.controller.state,
+      builder: (context, _) => FutureBuilder<(TodayGoal, StudyDayRecord)>(
+        future: _future,
+        builder: (context, snapshot) {
+          final goal = snapshot.data?.$1 ?? const TodayGoal();
+          final record = snapshot.data?.$2 ?? StudyDayRecord(date: widget.date);
+          final target = goal.targetPomodoros ?? 4;
+          final done = record.pomodoroCount.clamp(0, target);
+          final focusMinutes = math.max(
+            1,
+            widget.controller.config.focusDuration.inMinutes,
+          );
+          final remaining = math.max(0, target - done) * focusMinutes;
+          final progress = target == 0 ? 0.0 : done / target;
+          return _GlassPanel(
+            key: const Key('study_focus_goal_card'),
+            borderRadius: BorderRadius.circular(16),
+            padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
+            child: Row(
+              children: [
+                SizedBox.square(
+                  dimension: 36,
+                  child: Checkbox(
+                    value: goal.completed,
+                    shape: const CircleBorder(),
+                    side: BorderSide(
+                      color: Colors.white.withValues(alpha: 0.56),
+                    ),
+                    activeColor: _studyFocusAccent,
+                    onChanged: (value) =>
+                        _toggleCompleted(goal, record, value ?? false),
+                  ),
+                ),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        goal.text.isEmpty ? '完成 SDK 文档编写' : goal.text,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: Theme.of(context).textTheme.titleMedium
+                            ?.copyWith(
+                              color: Colors.white,
+                              fontWeight: FontWeight.w800,
+                            ),
+                      ),
+                      const SizedBox(height: 5),
+                      Text(
+                        '番茄进度: $done/$target | 预计还需 $remaining 分钟',
+                        style: Theme.of(context).textTheme.labelMedium
+                            ?.copyWith(
+                              color: Colors.white.withValues(alpha: 0.64),
+                              fontWeight: FontWeight.w600,
+                            ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 18),
+                SizedBox(
+                  width: 118,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        '${(progress * 100).round()}% 完成度',
+                        style: Theme.of(context).textTheme.labelMedium
+                            ?.copyWith(
+                              color: _studyFocusAccent,
+                              fontWeight: FontWeight.w800,
+                            ),
+                      ),
+                      const SizedBox(height: 7),
+                      ClipRRect(
+                        borderRadius: BorderRadius.circular(999),
+                        child: LinearProgressIndicator(
+                          minHeight: 6,
+                          value: progress.clamp(0.0, 1.0),
+                          backgroundColor: Colors.white.withValues(alpha: 0.12),
+                          color: _studyFocusAccent,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  Future<(TodayGoal, StudyDayRecord)> _load() async {
+    final goal = await widget.store.loadTodayGoal(widget.date);
+    final record = await widget.store.loadDayRecord(widget.date);
+    return (goal, record);
+  }
+
+  Future<void> _toggleCompleted(
+    TodayGoal goal,
+    StudyDayRecord record,
+    bool completed,
+  ) async {
+    final next = goal.copyWith(completed: completed);
+    setState(() => _future = Future.value((next, record)));
+    try {
+      await widget.store.saveTodayGoal(widget.date, next);
+    } catch (_) {
+      if (!mounted) {
+        return;
+      }
+      setState(() => _future = Future.value((goal, record)));
+      ScaffoldMessenger.maybeOf(
+        context,
+      )?.showSnackBar(const SnackBar(content: Text('目标保存失败')));
+    }
+  }
+}
+
+class _DesktopAnalyticsPage extends StatelessWidget {
+  const _DesktopAnalyticsPage({
+    required this.store,
+    required this.date,
+    super.key,
+  });
 
   final StudyStore store;
   final DateTime date;
 
   @override
   Widget build(BuildContext context) {
-    return FutureBuilder<(TodayGoal, StudyDayRecord)>(
-      future: _load(),
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(32),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('数据统计', style: Theme.of(context).textTheme.headlineSmall),
+          const SizedBox(height: 20),
+          _DesktopPanelCard(
+            child: StudyAnalyticsView(store: store, date: date),
+          ),
+          const SizedBox(height: 20),
+          for (final range in StudyReportRange.values) ...[
+            _DesktopPanelCard(
+              child: StudyReportView(store: store, range: range, date: date),
+            ),
+            const SizedBox(height: 14),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _DesktopHistoryPage extends StatefulWidget {
+  const _DesktopHistoryPage({
+    required this.store,
+    required this.date,
+    required this.taskEditor,
+  });
+
+  final StudyStore store;
+  final DateTime date;
+  final StudyTaskEditor? taskEditor;
+
+  @override
+  State<_DesktopHistoryPage> createState() => _DesktopHistoryPageState();
+}
+
+class _DesktopHistoryPageState extends State<_DesktopHistoryPage> {
+  late DateTime _selectedDate = _dateOnly(widget.date);
+  late Future<(List<StudyDayRecord>, List<StudyTaskRecord>)> _future = _load();
+  StreamSubscription<StudyStoreChange>? _subscription;
+
+  @override
+  void initState() {
+    super.initState();
+    _subscription = widget.store.changes.listen((change) {
+      if (!mounted ||
+          (change.kind != StudyStoreChangeKind.dayRecord &&
+              change.kind != StudyStoreChangeKind.tasks)) {
+        return;
+      }
+      setState(() {
+        _future = _load();
+      });
+    });
+  }
+
+  @override
+  void didUpdateWidget(covariant _DesktopHistoryPage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.store != widget.store) {
+      unawaited(_subscription?.cancel());
+      _subscription = widget.store.changes.listen((_) {
+        if (mounted) {
+          setState(() {
+            _future = _load();
+          });
+        }
+      });
+    }
+    if (oldWidget.date != widget.date) {
+      _selectedDate = _dateOnly(widget.date);
+    }
+    if (oldWidget.store != widget.store || oldWidget.date != widget.date) {
+      _future = _load();
+    }
+  }
+
+  @override
+  void dispose() {
+    unawaited(_subscription?.cancel());
+    super.dispose();
+  }
+
+  Future<(List<StudyDayRecord>, List<StudyTaskRecord>)> _load() async {
+    final end = _dateOnly(widget.date);
+    final records = await widget.store.loadDayRecords(
+      start: end.subtract(const Duration(days: 29)),
+      end: end,
+    );
+    final tasks = await widget.store.loadTaskRecords(_selectedDate);
+    return (records.reversed.toList(growable: false), tasks);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<(List<StudyDayRecord>, List<StudyTaskRecord>)>(
+      future: _future,
       builder: (context, snapshot) {
-        final goal = snapshot.data?.$1 ?? const TodayGoal();
-        final record = snapshot.data?.$2 ?? StudyDayRecord(date: date);
-        final target = goal.targetPomodoros ?? 4;
-        final done = record.pomodoroCount.clamp(0, target);
-        final remaining = math.max(0, target - done) * 25;
-        final progress = target == 0 ? 0.0 : done / target;
-        return _GlassPanel(
-          key: const Key('study_focus_goal_card'),
-          borderRadius: BorderRadius.circular(16),
-          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
+        final records = snapshot.data?.$1;
+        final tasks = snapshot.data?.$2;
+        if (records == null || tasks == null) {
+          return const Center(child: CircularProgressIndicator());
+        }
+        return Padding(
+          padding: const EdgeInsets.all(28),
           child: Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              SizedBox.square(
-                dimension: 36,
-                child: Checkbox(
-                  value: goal.completed,
-                  shape: const CircleBorder(),
-                  side: BorderSide(color: Colors.white.withValues(alpha: 0.56)),
-                  activeColor: _studyFocusAccent,
-                  onChanged: (value) {
-                    store.saveTodayGoal(date, goal.copyWith(completed: value));
-                  },
-                ),
-              ),
-              const SizedBox(width: 14),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(
-                      goal.text.isEmpty ? '完成 SDK 文档编写' : goal.text,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                        color: Colors.white,
-                        fontWeight: FontWeight.w800,
-                      ),
-                    ),
-                    const SizedBox(height: 5),
-                    Text(
-                      '番茄进度: $done/$target | 预计还需 $remaining 分钟',
-                      style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                        color: Colors.white.withValues(alpha: 0.64),
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(width: 18),
               SizedBox(
-                width: 118,
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.end,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(
-                      '${(progress * 100).round()}% 完成度',
-                      style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                        color: _studyFocusAccent,
-                        fontWeight: FontWeight.w800,
+                width: 330,
+                child: _DesktopPanelCard(
+                  child: ListView.builder(
+                    itemCount: records.length,
+                    itemBuilder: (context, index) {
+                      final record = records[index];
+                      final selected =
+                          _dateKey(record.date) == _dateKey(_selectedDate);
+                      return ListTile(
+                        selected: selected,
+                        title: Text(_dateKey(record.date)),
+                        subtitle: Text(
+                          '${record.focusDuration.inMinutes} 分钟 · ${record.pomodoroCount} 个番茄',
+                        ),
+                        onTap: () {
+                          setState(() {
+                            _selectedDate = record.date;
+                            _future = _load();
+                          });
+                        },
+                      );
+                    },
+                  ),
+                ),
+              ),
+              const SizedBox(width: 20),
+              Expanded(
+                child: _DesktopPanelCard(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              '${_dateKey(_selectedDate)} 的任务',
+                              style: Theme.of(context).textTheme.titleMedium,
+                            ),
+                          ),
+                          FilledButton.icon(
+                            onPressed: () => _editStudyTask(
+                              context,
+                              store: widget.store,
+                              date: _selectedDate,
+                              editor: widget.taskEditor,
+                            ),
+                            icon: const Icon(Icons.add),
+                            label: const Text('新建任务'),
+                          ),
+                        ],
                       ),
-                    ),
-                    const SizedBox(height: 7),
-                    ClipRRect(
-                      borderRadius: BorderRadius.circular(999),
-                      child: LinearProgressIndicator(
-                        minHeight: 6,
-                        value: progress.clamp(0.0, 1.0),
-                        backgroundColor: Colors.white.withValues(alpha: 0.12),
-                        color: _studyFocusAccent,
+                      const SizedBox(height: 12),
+                      Expanded(
+                        child: tasks.isEmpty
+                            ? const Center(child: Text('暂无任务'))
+                            : ListView(
+                                children: tasks
+                                    .map(
+                                      (task) => ListTile(
+                                        key: Key('desktop_task_${task.id}'),
+                                        leading: Checkbox(
+                                          value: task.completed,
+                                          onChanged: (value) => _saveTask(
+                                            task.copyWith(
+                                              completed: value ?? false,
+                                            ),
+                                          ),
+                                        ),
+                                        title: Text(
+                                          task.title,
+                                          style: TextStyle(
+                                            decoration: task.completed
+                                                ? TextDecoration.lineThrough
+                                                : null,
+                                          ),
+                                        ),
+                                        trailing: Wrap(
+                                          children: [
+                                            IconButton(
+                                              tooltip: '编辑',
+                                              onPressed: () => _editStudyTask(
+                                                context,
+                                                store: widget.store,
+                                                date: _selectedDate,
+                                                existing: task,
+                                                editor: widget.taskEditor,
+                                              ),
+                                              icon: const Icon(Icons.edit),
+                                            ),
+                                            IconButton(
+                                              tooltip: '删除',
+                                              onPressed: () =>
+                                                  _deleteTask(task),
+                                              icon: const Icon(Icons.delete),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                    )
+                                    .toList(growable: false),
+                              ),
                       ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
               ),
             ],
@@ -1173,10 +1960,222 @@ class _StudyFocusDesktopGoalCard extends StatelessWidget {
     );
   }
 
-  Future<(TodayGoal, StudyDayRecord)> _load() async {
-    final goal = await store.loadTodayGoal(date);
-    final record = await store.loadDayRecord(date);
-    return (goal, record);
+  Future<void> _deleteTask(StudyTaskRecord task) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('删除任务'),
+        content: Text('确定删除“${task.title}”吗？'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('删除'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed == true) {
+      try {
+        await widget.store.deleteTaskRecord(_selectedDate, task.id);
+      } catch (_) {
+        if (mounted) {
+          ScaffoldMessenger.maybeOf(
+            context,
+          )?.showSnackBar(const SnackBar(content: Text('任务删除失败')));
+        }
+      }
+    }
+  }
+
+  Future<void> _saveTask(StudyTaskRecord task) async {
+    try {
+      await widget.store.saveTaskRecord(_selectedDate, task);
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.maybeOf(
+          context,
+        )?.showSnackBar(const SnackBar(content: Text('任务保存失败')));
+      }
+    }
+  }
+}
+
+class _DesktopSettingsPage extends StatefulWidget {
+  const _DesktopSettingsPage({
+    required this.sound,
+    required this.backgrounds,
+    required this.activeBackgroundId,
+    required this.maskOpacity,
+    required this.onBackgroundChanged,
+  });
+
+  final _StudySoundCoordinator sound;
+  final List<StudyBackgroundOption> backgrounds;
+  final String activeBackgroundId;
+  final double maskOpacity;
+  final Future<void> Function(String id, double maskOpacity)
+  onBackgroundChanged;
+
+  @override
+  State<_DesktopSettingsPage> createState() => _DesktopSettingsPageState();
+}
+
+class _DesktopSettingsPageState extends State<_DesktopSettingsPage> {
+  late double _maskOpacity = widget.maskOpacity;
+
+  @override
+  void didUpdateWidget(covariant _DesktopSettingsPage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.maskOpacity != widget.maskOpacity) {
+      _maskOpacity = widget.maskOpacity;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(32),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('设置', style: Theme.of(context).textTheme.headlineSmall),
+          const SizedBox(height: 20),
+          _DesktopPanelCard(
+            child: _StudySoundControls(coordinator: widget.sound),
+          ),
+          const SizedBox(height: 20),
+          _DesktopPanelCard(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('背景', style: Theme.of(context).textTheme.titleMedium),
+                const SizedBox(height: 12),
+                Wrap(
+                  spacing: 10,
+                  runSpacing: 10,
+                  children: widget.backgrounds
+                      .map(
+                        (option) => ChoiceChip(
+                          label: Text(option.label),
+                          selected: option.id == widget.activeBackgroundId,
+                          onSelected: (_) => widget.onBackgroundChanged(
+                            option.id,
+                            _maskOpacity,
+                          ),
+                        ),
+                      )
+                      .toList(growable: false),
+                ),
+                const SizedBox(height: 18),
+                Text('遮罩 ${(100 * _maskOpacity).round()}%'),
+                Slider(
+                  key: const Key('desktop_background_mask'),
+                  value: _maskOpacity,
+                  max: 0.85,
+                  onChanged: (value) => setState(() => _maskOpacity = value),
+                  onChangeEnd: (value) => widget.onBackgroundChanged(
+                    widget.activeBackgroundId,
+                    value,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+var _taskSequence = 0;
+
+Future<void> _editStudyTask(
+  BuildContext context, {
+  required StudyStore store,
+  required DateTime date,
+  StudyTaskRecord? existing,
+  StudyTaskEditor? editor,
+}) async {
+  final task = editor == null
+      ? await showDialog<StudyTaskRecord>(
+          context: context,
+          builder: (context) => _StudyTaskDialog(existing: existing),
+        )
+      : await editor(context, date, existing);
+  if (task != null) {
+    try {
+      await store.saveTaskRecord(date, task);
+    } catch (_) {
+      if (context.mounted) {
+        ScaffoldMessenger.maybeOf(
+          context,
+        )?.showSnackBar(const SnackBar(content: Text('任务保存失败')));
+      }
+    }
+  }
+}
+
+class _StudyTaskDialog extends StatefulWidget {
+  const _StudyTaskDialog({this.existing});
+
+  final StudyTaskRecord? existing;
+
+  @override
+  State<_StudyTaskDialog> createState() => _StudyTaskDialogState();
+}
+
+class _StudyTaskDialogState extends State<_StudyTaskDialog> {
+  late final TextEditingController _controller = TextEditingController(
+    text: widget.existing?.title ?? '',
+  );
+  String? _error;
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: Text(widget.existing == null ? '新建任务' : '编辑任务'),
+      content: TextField(
+        key: const Key('study_task_title'),
+        controller: _controller,
+        autofocus: true,
+        decoration: InputDecoration(labelText: '任务名称', errorText: _error),
+        onSubmitted: (_) => _save(),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('取消'),
+        ),
+        FilledButton(onPressed: _save, child: const Text('保存')),
+      ],
+    );
+  }
+
+  void _save() {
+    final title = _controller.text.trim();
+    if (title.isEmpty) {
+      setState(() => _error = '任务名称不能为空');
+      return;
+    }
+    Navigator.pop(
+      context,
+      widget.existing?.copyWith(title: title) ??
+          StudyTaskRecord(
+            id: 'task_${DateTime.now().toUtc().microsecondsSinceEpoch}_${_taskSequence++}',
+            title: title,
+            completed: false,
+          ),
+    );
   }
 }
 
@@ -1185,11 +2184,13 @@ class _DesktopSidePanel extends StatelessWidget {
     required this.members,
     required this.onlineCount,
     required this.stats,
+    required this.sound,
   });
 
   final Widget members;
   final int onlineCount;
   final Widget stats;
+  final _StudySoundCoordinator sound;
 
   @override
   Widget build(BuildContext context) {
@@ -1206,7 +2207,7 @@ class _DesktopSidePanel extends StatelessWidget {
             const SizedBox(height: 24),
             const _DesktopSectionHeader(title: '白噪音'),
             const SizedBox(height: 12),
-            const _DesktopSoundGrid(),
+            _DesktopSoundGrid(coordinator: sound),
             const SizedBox(height: 24),
             const _DesktopSectionHeader(title: '今日数据 (私密)'),
             const SizedBox(height: 12),
@@ -1257,10 +2258,10 @@ class _DesktopPanelCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        color: Colors.black.withValues(alpha: 0.18),
-        border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+    return Material(
+      color: Colors.black.withValues(alpha: 0.18),
+      shape: RoundedRectangleBorder(
+        side: BorderSide(color: Colors.white.withValues(alpha: 0.08)),
         borderRadius: BorderRadius.circular(8),
       ),
       child: Padding(padding: const EdgeInsets.all(12), child: child),
@@ -1269,56 +2270,98 @@ class _DesktopPanelCard extends StatelessWidget {
 }
 
 class _DesktopSoundGrid extends StatelessWidget {
-  const _DesktopSoundGrid();
+  const _DesktopSoundGrid({required this.coordinator});
+
+  final _StudySoundCoordinator coordinator;
 
   @override
   Widget build(BuildContext context) {
-    return const Row(
-      children: [
-        Expanded(
-          child: _DesktopSoundTile(icon: Icons.water_drop, label: '雨声'),
-        ),
-        SizedBox(width: 10),
-        Expanded(
-          child: _DesktopSoundTile(icon: Icons.fireplace, label: '壁炉'),
-        ),
-        SizedBox(width: 10),
-        Expanded(
-          child: _DesktopSoundTile(icon: Icons.local_cafe, label: '咖啡'),
-        ),
-      ],
+    return ListenableBuilder(
+      listenable: coordinator,
+      builder: (context, _) => Wrap(
+        spacing: 10,
+        runSpacing: 10,
+        children: coordinator.tracks
+            .map(
+              (track) => SizedBox(
+                width: 96,
+                child: _DesktopSoundTile(
+                  icon: _soundIcon(track.id),
+                  label: track.label,
+                  selected: coordinator.selected?.id == track.id,
+                  playing:
+                      coordinator.playing &&
+                      coordinator.selected?.id == track.id,
+                  onPressed: () => coordinator.toggle(track),
+                ),
+              ),
+            )
+            .toList(growable: false),
+      ),
     );
   }
+
+  IconData _soundIcon(String id) => switch (id) {
+    'rain' => Icons.water_drop,
+    'cafe' => Icons.local_cafe,
+    'library' => Icons.local_library,
+    'keyboard' => Icons.keyboard,
+    _ => Icons.graphic_eq,
+  };
 }
 
 class _DesktopSoundTile extends StatelessWidget {
-  const _DesktopSoundTile({required this.icon, required this.label});
+  const _DesktopSoundTile({
+    required this.icon,
+    required this.label,
+    required this.selected,
+    required this.playing,
+    required this.onPressed,
+  });
 
   final IconData icon;
   final String label;
+  final bool selected;
+  final bool playing;
+  final VoidCallback onPressed;
 
   @override
   Widget build(BuildContext context) {
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.06),
-        border: Border.all(color: Colors.white.withValues(alpha: 0.10)),
-        borderRadius: BorderRadius.circular(8),
-      ),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 14),
-        child: Column(
-          children: [
-            Icon(icon, size: 22, color: _studyFocusAccent),
-            const SizedBox(height: 8),
-            Text(
-              label,
-              style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                color: Colors.white.withValues(alpha: 0.78),
-                fontWeight: FontWeight.w700,
+    return InkWell(
+      key: Key('desktop_sound_$label'),
+      onTap: onPressed,
+      borderRadius: BorderRadius.circular(8),
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          color: Colors.white.withValues(alpha: selected ? 0.16 : 0.06),
+          border: Border.all(
+            color: selected
+                ? _studyFocusAccent
+                : Colors.white.withValues(alpha: 0.10),
+          ),
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 14),
+          child: Column(
+            children: [
+              Icon(
+                playing ? Icons.pause : icon,
+                size: 22,
+                color: _studyFocusAccent,
               ),
-            ),
-          ],
+              const SizedBox(height: 8),
+              Text(
+                label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                  color: Colors.white.withValues(alpha: 0.78),
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -1344,7 +2387,7 @@ class _StudyFocusCoreCluster extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          const Center(child: _PresetBar()),
+          Center(child: _PresetBar(controller: controller)),
           SizedBox(height: sizing.clusterGap),
           Center(
             child: _VisualPomodoroTimer(
@@ -1416,53 +2459,192 @@ class _StudyFocusSizing {
 }
 
 class _PresetBar extends StatelessWidget {
-  const _PresetBar();
+  const _PresetBar({required this.controller, this.verbose = false});
+
+  final PomodoroController controller;
+  final bool verbose;
 
   @override
   Widget build(BuildContext context) {
-    return _GlassPanel(
-      borderRadius: BorderRadius.circular(999),
-      padding: const EdgeInsets.all(4),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: const [
-          _PresetChip(label: '25/5', selected: true),
-          _PresetChip(label: '50/10'),
-          _PresetChip(label: '自定义'),
-        ],
-      ),
+    return StreamBuilder<PomodoroState>(
+      stream: controller.states,
+      initialData: controller.state,
+      builder: (context, snapshot) {
+        final status = snapshot.data?.status ?? controller.state.status;
+        final enabled =
+            status == PomodoroStatus.idle || status == PomodoroStatus.finished;
+        final preset = controller.config.preset;
+        return _GlassPanel(
+          borderRadius: BorderRadius.circular(999),
+          padding: const EdgeInsets.all(4),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              _PresetChip(
+                label: verbose ? '25 / 5 分钟' : '25/5',
+                selected: preset == PomodoroPreset.twentyFiveFive,
+                onPressed: enabled
+                    ? () => controller.setConfig(PomodoroConfig())
+                    : null,
+              ),
+              _PresetChip(
+                label: verbose ? '50 / 10 分钟' : '50/10',
+                selected: preset == PomodoroPreset.fiftyTen,
+                onPressed: enabled
+                    ? () => controller.setConfig(PomodoroConfig.fiftyTen())
+                    : null,
+              ),
+              _PresetChip(
+                label: verbose ? '自定义时长' : '自定义',
+                selected: preset == PomodoroPreset.custom,
+                onPressed: enabled
+                    ? () => _showCustomPomodoroDialog(context, controller)
+                    : null,
+              ),
+            ],
+          ),
+        );
+      },
     );
   }
 }
 
 class _PresetChip extends StatelessWidget {
-  const _PresetChip({required this.label, this.selected = false});
+  const _PresetChip({
+    required this.label,
+    required this.onPressed,
+    this.selected = false,
+  });
 
   final String label;
   final bool selected;
+  final VoidCallback? onPressed;
 
   @override
   Widget build(BuildContext context) {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 2),
-      child: DecoratedBox(
-        decoration: BoxDecoration(
-          color: selected
-              ? Colors.white.withValues(alpha: 0.20)
-              : Colors.transparent,
+      child: Opacity(
+        opacity: onPressed == null ? 0.5 : 1,
+        child: InkWell(
           borderRadius: BorderRadius.circular(999),
-        ),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-          child: Text(
-            label,
-            style: Theme.of(context).textTheme.labelMedium?.copyWith(
-              color: Colors.white.withValues(alpha: selected ? 1 : 0.64),
-              fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+          onTap: onPressed,
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              color: selected
+                  ? Colors.white.withValues(alpha: 0.20)
+                  : Colors.transparent,
+              borderRadius: BorderRadius.circular(999),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+              child: Text(
+                label,
+                style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                  color: Colors.white.withValues(alpha: selected ? 1 : 0.64),
+                  fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+                ),
+              ),
             ),
           ),
         ),
+      ),
+    );
+  }
+}
+
+Future<void> _showCustomPomodoroDialog(
+  BuildContext context,
+  PomodoroController controller,
+) async {
+  final config = await showDialog<PomodoroConfig>(
+    context: context,
+    builder: (context) =>
+        _CustomPomodoroDialog(initialConfig: controller.config),
+  );
+  if (config != null) {
+    controller.setConfig(config);
+  }
+}
+
+class _CustomPomodoroDialog extends StatefulWidget {
+  const _CustomPomodoroDialog({required this.initialConfig});
+
+  final PomodoroConfig initialConfig;
+
+  @override
+  State<_CustomPomodoroDialog> createState() => _CustomPomodoroDialogState();
+}
+
+class _CustomPomodoroDialogState extends State<_CustomPomodoroDialog> {
+  late final _focusController = TextEditingController(
+    text: widget.initialConfig.focusDuration.inMinutes.toString(),
+  );
+  late final _breakController = TextEditingController(
+    text: widget.initialConfig.breakDuration.inMinutes.toString(),
+  );
+  String? _validationError;
+
+  @override
+  void dispose() {
+    _focusController.dispose();
+    _breakController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('自定义时长'),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          TextField(
+            key: const Key('pomodoro_custom_focus'),
+            controller: _focusController,
+            keyboardType: TextInputType.number,
+            decoration: const InputDecoration(labelText: '专注分钟'),
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            key: const Key('pomodoro_custom_break'),
+            controller: _breakController,
+            keyboardType: TextInputType.number,
+            decoration: const InputDecoration(labelText: '休息分钟'),
+          ),
+          if (_validationError != null) ...[
+            const SizedBox(height: 10),
+            Text(
+              _validationError!,
+              style: TextStyle(color: Theme.of(context).colorScheme.error),
+            ),
+          ],
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('取消'),
+        ),
+        FilledButton(onPressed: _apply, child: const Text('应用')),
+      ],
+    );
+  }
+
+  void _apply() {
+    final focus = int.tryParse(_focusController.text.trim());
+    final rest = int.tryParse(_breakController.text.trim());
+    if (focus == null || focus <= 0 || rest == null || rest < 0) {
+      setState(() {
+        _validationError = '专注时长须大于 0，休息时长不能为负数';
+      });
+      return;
+    }
+    Navigator.of(context).pop(
+      PomodoroConfig.custom(
+        focusDuration: Duration(minutes: focus),
+        breakDuration: Duration(minutes: rest),
       ),
     );
   }
@@ -1485,15 +2667,12 @@ class _VisualPomodoroTimer extends StatefulWidget {
 class _VisualPomodoroTimerState extends State<_VisualPomodoroTimer> {
   late PomodoroState _state = widget.controller.state;
   StreamSubscription<PomodoroState>? _subscription;
+  Object? _error;
 
   @override
   void initState() {
     super.initState();
-    _subscription = widget.controller.states.listen((state) {
-      if (mounted) {
-        setState(() => _state = state);
-      }
-    });
+    _listen();
   }
 
   @override
@@ -1502,11 +2681,8 @@ class _VisualPomodoroTimerState extends State<_VisualPomodoroTimer> {
     if (oldWidget.controller != widget.controller) {
       _subscription?.cancel();
       _state = widget.controller.state;
-      _subscription = widget.controller.states.listen((state) {
-        if (mounted) {
-          setState(() => _state = state);
-        }
-      });
+      _error = null;
+      _listen();
     }
   }
 
@@ -1568,7 +2744,7 @@ class _VisualPomodoroTimerState extends State<_VisualPomodoroTimer> {
                   ),
                   const SizedBox(height: 4),
                   Text(
-                    _statusLabel(_state.status),
+                    _error == null ? _statusLabel(_state.status) : '保存失败',
                     style: Theme.of(context).textTheme.labelLarge?.copyWith(
                       color: Colors.white.withValues(alpha: 0.74),
                     ),
@@ -1579,6 +2755,24 @@ class _VisualPomodoroTimerState extends State<_VisualPomodoroTimer> {
           ),
         ],
       ),
+    );
+  }
+
+  void _listen() {
+    _subscription = widget.controller.states.listen(
+      (state) {
+        if (mounted) {
+          setState(() {
+            _state = state;
+            _error = null;
+          });
+        }
+      },
+      onError: (Object error) {
+        if (mounted) {
+          setState(() => _error = error);
+        }
+      },
     );
   }
 
@@ -1620,6 +2814,8 @@ class _VisualTimerControls extends StatelessWidget {
         final running =
             status == PomodoroStatus.focusing ||
             status == PomodoroStatus.breaking;
+        final paused = status == PomodoroStatus.paused;
+        final active = running || paused;
         return Row(
           mainAxisSize: MainAxisSize.min,
           mainAxisAlignment: MainAxisAlignment.center,
@@ -1632,14 +2828,25 @@ class _VisualTimerControls extends StatelessWidget {
               child: SizedBox.square(
                 dimension: buttonSize,
                 child: IconButton(
-                  tooltip: running ? '暂停' : '开始',
+                  tooltip: running
+                      ? '暂停'
+                      : paused
+                      ? '继续'
+                      : '开始',
                   icon: Icon(running ? Icons.pause : Icons.play_arrow),
-                  onPressed: running ? controller.pause : controller.start,
+                  onPressed: running
+                      ? controller.pause
+                      : paused
+                      ? controller.resume
+                      : controller.start,
                 ),
               ),
             ),
             SizedBox(width: gap),
-            _ControlTextButton(label: '跳过', onPressed: controller.resume),
+            _ControlTextButton(
+              label: '跳过',
+              onPressed: active ? controller.skip : null,
+            ),
           ],
         );
       },
@@ -1651,7 +2858,7 @@ class _ControlTextButton extends StatelessWidget {
   const _ControlTextButton({required this.label, required this.onPressed});
 
   final String label;
-  final VoidCallback onPressed;
+  final VoidCallback? onPressed;
 
   @override
   Widget build(BuildContext context) {
@@ -1688,10 +2895,14 @@ class _StudyFocusGoalCardState extends State<_StudyFocusGoalCard> {
   var _goal = const TodayGoal();
   var _record = StudyDayRecord(date: DateTime(1970));
   var _loaded = false;
+  var _loadGeneration = 0;
+  var _saveGeneration = 0;
+  StreamSubscription<StudyStoreChange>? _subscription;
 
   @override
   void initState() {
     super.initState();
+    _subscribe();
     _load();
   }
 
@@ -1699,20 +2910,37 @@ class _StudyFocusGoalCardState extends State<_StudyFocusGoalCard> {
   void didUpdateWidget(covariant _StudyFocusGoalCard oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.store != widget.store || oldWidget.date != widget.date) {
+      unawaited(_subscription?.cancel());
+      _subscribe();
       _load();
     }
   }
 
   @override
   void dispose() {
+    unawaited(_subscription?.cancel());
     _textController.dispose();
     super.dispose();
   }
 
+  void _subscribe() {
+    _subscription = widget.store.changes.listen((change) {
+      if (!mounted ||
+          (change.kind != StudyStoreChangeKind.goal &&
+              change.kind != StudyStoreChangeKind.dayRecord) ||
+          (change.date != null &&
+              _dateKey(change.date!) != _dateKey(widget.date))) {
+        return;
+      }
+      unawaited(_load());
+    });
+  }
+
   Future<void> _load() async {
+    final generation = ++_loadGeneration;
     final goal = await widget.store.loadTodayGoal(widget.date);
     final record = await widget.store.loadDayRecord(widget.date);
-    if (!mounted) {
+    if (!mounted || generation != _loadGeneration) {
       return;
     }
     setState(() {
@@ -1806,8 +3034,20 @@ class _StudyFocusGoalCardState extends State<_StudyFocusGoalCard> {
   }
 
   Future<void> _save(TodayGoal goal) async {
-    setState(() => _goal = goal.copyWith(completed: goal.completed));
-    await widget.store.saveTodayGoal(widget.date, goal);
+    final previous = _goal;
+    final generation = ++_saveGeneration;
+    setState(() => _goal = goal);
+    try {
+      await widget.store.saveTodayGoal(widget.date, goal);
+    } catch (_) {
+      if (!mounted || generation != _saveGeneration) {
+        return;
+      }
+      setState(() => _goal = previous);
+      ScaffoldMessenger.maybeOf(
+        context,
+      )?.showSnackBar(const SnackBar(content: Text('目标保存失败')));
+    }
   }
 }
 
@@ -1905,56 +3145,6 @@ class _SectionHeading extends StatelessWidget {
   }
 }
 
-class _PrototypeSoundBar extends StatelessWidget {
-  const _PrototypeSoundBar();
-
-  @override
-  Widget build(BuildContext context) {
-    return const Row(
-      children: [
-        Expanded(child: _PrototypeSoundPill(label: '雨声', selected: true)),
-        SizedBox(width: 8),
-        Expanded(child: _PrototypeSoundPill(label: '白噪')),
-        SizedBox(width: 8),
-        Expanded(child: _PrototypeSoundPill(label: '咖啡')),
-      ],
-    );
-  }
-}
-
-class _PrototypeSoundPill extends StatelessWidget {
-  const _PrototypeSoundPill({required this.label, this.selected = false});
-
-  final String label;
-  final bool selected;
-
-  @override
-  Widget build(BuildContext context) {
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        color: selected
-            ? _studyFocusAccent.withValues(alpha: 0.20)
-            : Colors.white.withValues(alpha: 0.06),
-        border: Border.all(color: Colors.white.withValues(alpha: 0.10)),
-        borderRadius: BorderRadius.circular(8),
-      ),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 7),
-        child: Text(
-          label,
-          textAlign: TextAlign.center,
-          style: Theme.of(context).textTheme.labelSmall?.copyWith(
-            color: selected
-                ? _studyFocusAccent
-                : Colors.white.withValues(alpha: 0.68),
-            fontWeight: FontWeight.w700,
-          ),
-        ),
-      ),
-    );
-  }
-}
-
 class _PrototypeStatsOverview extends StatelessWidget {
   const _PrototypeStatsOverview({required this.store, required this.date});
 
@@ -1963,8 +3153,11 @@ class _PrototypeStatsOverview extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return FutureBuilder<StudyStats>(
-      future: StudyAnalytics(store).statsFor(date),
+    return _ReactiveStudyStoreBuilder<StudyStats>(
+      store: store,
+      dependency: _dateKey(date),
+      changeKinds: const {StudyStoreChangeKind.dayRecord},
+      load: () => StudyAnalytics(store).statsFor(date),
       builder: (context, snapshot) {
         final stats = snapshot.data;
         if (stats == null) {
@@ -2290,15 +3483,48 @@ class PomodoroTimerView extends StatefulWidget {
 
 class _PomodoroTimerViewState extends State<PomodoroTimerView> {
   late PomodoroState _state = widget.controller.state;
+  StreamSubscription<PomodoroState>? _subscription;
+  Object? _error;
 
   @override
   void initState() {
     super.initState();
-    widget.controller.states.listen((state) {
-      if (mounted) {
-        setState(() => _state = state);
-      }
-    });
+    _listen();
+  }
+
+  @override
+  void didUpdateWidget(covariant PomodoroTimerView oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.controller != widget.controller) {
+      _subscription?.cancel();
+      _state = widget.controller.state;
+      _error = null;
+      _listen();
+    }
+  }
+
+  @override
+  void dispose() {
+    _subscription?.cancel();
+    super.dispose();
+  }
+
+  void _listen() {
+    _subscription = widget.controller.states.listen(
+      (state) {
+        if (mounted) {
+          setState(() {
+            _state = state;
+            _error = null;
+          });
+        }
+      },
+      onError: (Object error) {
+        if (mounted) {
+          setState(() => _error = error);
+        }
+      },
+    );
   }
 
   @override
@@ -2340,6 +3566,7 @@ class _PomodoroTimerViewState extends State<PomodoroTimerView> {
           ),
           const SizedBox(height: 6),
           Text(_statusLabel(_state.status)),
+          if (_error != null) const Text('Unable to save focus session'),
         ],
       ),
     );
@@ -2377,23 +3604,51 @@ class _TodayGoalViewState extends State<TodayGoalView> {
   final _targetController = TextEditingController();
   var _completed = false;
   var _loaded = false;
+  var _loadGeneration = 0;
+  var _saveGeneration = 0;
+  StreamSubscription<StudyStoreChange>? _subscription;
 
   @override
   void initState() {
     super.initState();
+    _subscribe();
     _load();
   }
 
   @override
+  void didUpdateWidget(covariant TodayGoalView oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.store != widget.store || oldWidget.date != widget.date) {
+      unawaited(_subscription?.cancel());
+      _subscribe();
+      unawaited(_load());
+    }
+  }
+
+  @override
   void dispose() {
+    unawaited(_subscription?.cancel());
     _textController.dispose();
     _targetController.dispose();
     super.dispose();
   }
 
+  void _subscribe() {
+    _subscription = widget.store.changes.listen((change) {
+      if (!mounted ||
+          change.kind != StudyStoreChangeKind.goal ||
+          (change.date != null &&
+              _dateKey(change.date!) != _dateKey(widget.date))) {
+        return;
+      }
+      unawaited(_load());
+    });
+  }
+
   Future<void> _load() async {
+    final generation = ++_loadGeneration;
     final goal = await widget.store.loadTodayGoal(widget.date);
-    if (!mounted) {
+    if (!mounted || generation != _loadGeneration) {
       return;
     }
     setState(() {
@@ -2422,7 +3677,7 @@ class _TodayGoalViewState extends State<TodayGoalView> {
               labelText: 'Today goal',
               border: OutlineInputBorder(),
             ),
-            onChanged: (_) => _save(),
+            onChanged: (_) => unawaited(_save()),
           ),
           const SizedBox(height: 8),
           Row(
@@ -2435,7 +3690,7 @@ class _TodayGoalViewState extends State<TodayGoalView> {
                     labelText: 'Target pomodoros',
                     border: OutlineInputBorder(),
                   ),
-                  onChanged: (_) => _save(),
+                  onChanged: (_) => unawaited(_save()),
                 ),
               ),
               const SizedBox(width: 8),
@@ -2443,7 +3698,7 @@ class _TodayGoalViewState extends State<TodayGoalView> {
                 value: _completed,
                 onChanged: (value) {
                   setState(() => _completed = value ?? false);
-                  _save();
+                  unawaited(_save());
                 },
               ),
             ],
@@ -2453,16 +3708,29 @@ class _TodayGoalViewState extends State<TodayGoalView> {
     );
   }
 
-  Future<void> _save() {
+  Future<void> _save() async {
     final target = int.tryParse(_targetController.text.trim());
-    return widget.store.saveTodayGoal(
-      widget.date,
-      TodayGoal(
-        text: _textController.text.trim(),
-        targetPomodoros: target,
-        completed: _completed,
-      ),
-    );
+    final generation = ++_saveGeneration;
+    try {
+      await widget.store.saveTodayGoal(
+        widget.date,
+        TodayGoal(
+          text: _textController.text.trim(),
+          targetPomodoros: target,
+          completed: _completed,
+        ),
+      );
+    } catch (_) {
+      if (!mounted || generation != _saveGeneration) {
+        return;
+      }
+      await _load();
+      if (mounted) {
+        ScaffoldMessenger.maybeOf(
+          context,
+        )?.showSnackBar(const SnackBar(content: Text('目标保存失败')));
+      }
+    }
   }
 }
 
@@ -2474,8 +3742,11 @@ class StudyStatsView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return FutureBuilder<StudyStats>(
-      future: StudyAnalytics(store).statsFor(date),
+    return _ReactiveStudyStoreBuilder<StudyStats>(
+      store: store,
+      dependency: _dateKey(date),
+      changeKinds: const {StudyStoreChangeKind.dayRecord},
+      load: () => StudyAnalytics(store).statsFor(date),
       builder: (context, snapshot) {
         final stats = snapshot.data;
         if (stats == null) {
@@ -2510,8 +3781,11 @@ class StudyAnalyticsView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return FutureBuilder<StudyStats>(
-      future: StudyAnalytics(store).statsFor(date),
+    return _ReactiveStudyStoreBuilder<StudyStats>(
+      store: store,
+      dependency: _dateKey(date),
+      changeKinds: const {StudyStoreChangeKind.dayRecord},
+      load: () => StudyAnalytics(store).statsFor(date),
       builder: (context, snapshot) {
         final stats = snapshot.data;
         if (stats == null) {
@@ -2586,8 +3860,14 @@ class StudyReportView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return FutureBuilder<StudyReport>(
-      future: StudyAnalytics(store).report(range, date),
+    return _ReactiveStudyStoreBuilder<StudyReport>(
+      store: store,
+      dependency: '${range.name}:${_dateKey(date)}',
+      changeKinds: const {
+        StudyStoreChangeKind.dayRecord,
+        StudyStoreChangeKind.tasks,
+      },
+      load: () => StudyAnalytics(store).report(range, date),
       builder: (context, snapshot) {
         final report = snapshot.data;
         if (report == null) {
@@ -2621,6 +3901,98 @@ class StudyReportView extends StatelessWidget {
       },
     );
   }
+}
+
+class _ReactiveStudyStoreBuilder<T> extends StatefulWidget {
+  const _ReactiveStudyStoreBuilder({
+    required this.store,
+    required this.dependency,
+    required this.changeKinds,
+    required this.load,
+    required this.builder,
+  });
+
+  final StudyStore store;
+  final Object dependency;
+  final Set<StudyStoreChangeKind> changeKinds;
+  final Future<T> Function() load;
+  final AsyncWidgetBuilder<T> builder;
+
+  @override
+  State<_ReactiveStudyStoreBuilder<T>> createState() =>
+      _ReactiveStudyStoreBuilderState<T>();
+}
+
+class _ReactiveStudyStoreBuilderState<T>
+    extends State<_ReactiveStudyStoreBuilder<T>> {
+  StreamSubscription<StudyStoreChange>? _subscription;
+  AsyncSnapshot<T> _snapshot = const AsyncSnapshot.waiting();
+  var _generation = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _subscribe();
+    unawaited(_load());
+  }
+
+  @override
+  void didUpdateWidget(covariant _ReactiveStudyStoreBuilder<T> oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.store != widget.store) {
+      unawaited(_subscription?.cancel());
+      _subscribe();
+    }
+    if (oldWidget.store != widget.store ||
+        oldWidget.dependency != widget.dependency) {
+      unawaited(_load(clear: true));
+    }
+  }
+
+  @override
+  void dispose() {
+    ++_generation;
+    unawaited(_subscription?.cancel());
+    super.dispose();
+  }
+
+  void _subscribe() {
+    _subscription = widget.store.changes.listen((change) {
+      if (mounted && widget.changeKinds.contains(change.kind)) {
+        unawaited(_load());
+      }
+    });
+  }
+
+  Future<void> _load({bool clear = false}) async {
+    final generation = ++_generation;
+    if (clear && mounted) {
+      setState(() => _snapshot = const AsyncSnapshot.waiting());
+    }
+    try {
+      final value = await widget.load();
+      if (!mounted || generation != _generation) {
+        return;
+      }
+      setState(
+        () => _snapshot = AsyncSnapshot.withData(ConnectionState.done, value),
+      );
+    } catch (error, stackTrace) {
+      if (!mounted || generation != _generation) {
+        return;
+      }
+      setState(
+        () => _snapshot = AsyncSnapshot.withError(
+          ConnectionState.done,
+          error,
+          stackTrace,
+        ),
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => widget.builder(context, _snapshot);
 }
 
 class _Metric extends StatelessWidget {
@@ -2740,7 +4112,7 @@ class JustAudioStudySoundPlayer implements StudySoundPlayer {
       case StudySoundSourceType.uri:
         await _player.setAudioSource(AudioSource.uri(Uri.parse(track.source)));
     }
-    await _player.play();
+    unawaited(_player.play());
   }
 
   @override
@@ -2752,6 +4124,156 @@ class JustAudioStudySoundPlayer implements StudySoundPlayer {
 
   @override
   Future<void> dispose() => _player.dispose();
+}
+
+class _StudySoundCoordinator extends ChangeNotifier {
+  _StudySoundCoordinator({
+    required this.tracks,
+    required StudySoundPlayer? player,
+    required StudyFocusSettings settings,
+    required this.onChanged,
+    required this.onError,
+  }) : _ownsPlayer = player == null,
+       _player = player ?? JustAudioStudySoundPlayer(),
+       _volume = settings.soundVolume {
+    _selected = _trackForId(settings.soundTrackId);
+  }
+
+  final List<StudySoundTrack> tracks;
+  final StudySoundPlayer _player;
+  final bool _ownsPlayer;
+  final Future<void> Function(String? trackId, double volume) onChanged;
+  final void Function(Object error, StackTrace stackTrace) onError;
+
+  StudySoundTrack? _selected;
+  bool _playing = false;
+  double _volume;
+
+  StudySoundTrack? get selected => _selected;
+  bool get playing => _playing;
+  double get volume => _volume;
+
+  Future<void> toggle(StudySoundTrack track) async {
+    try {
+      if (_playing && _selected?.id == track.id) {
+        await _player.pause();
+        _playing = false;
+      } else {
+        await _player.play(track, volume: _volume);
+        _selected = track;
+        _playing = true;
+        await onChanged(_selected?.id, _volume);
+      }
+      notifyListeners();
+    } catch (error, stackTrace) {
+      onError(error, stackTrace);
+    }
+  }
+
+  Future<void> pause() async {
+    if (!_playing) {
+      return;
+    }
+    try {
+      await _player.pause();
+      _playing = false;
+      notifyListeners();
+    } catch (error, stackTrace) {
+      onError(error, stackTrace);
+    }
+  }
+
+  Future<void> setVolume(double volume) async {
+    _volume = volume.clamp(0.0, 1.0).toDouble();
+    notifyListeners();
+    try {
+      await _player.setVolume(_volume);
+      await onChanged(_selected?.id, _volume);
+    } catch (error, stackTrace) {
+      onError(error, stackTrace);
+    }
+  }
+
+  void applySettings(StudyFocusSettings settings) {
+    _selected = _trackForId(settings.soundTrackId);
+    _volume = settings.soundVolume;
+    _playing = false;
+    notifyListeners();
+  }
+
+  StudySoundTrack? _trackForId(String? id) {
+    if (tracks.isEmpty) {
+      return null;
+    }
+    return tracks.firstWhere(
+      (track) => track.id == id,
+      orElse: () => tracks.first,
+    );
+  }
+
+  @override
+  void dispose() {
+    if (_ownsPlayer) {
+      unawaited(_player.dispose());
+    }
+    super.dispose();
+  }
+}
+
+class _StudySoundControls extends StatelessWidget {
+  const _StudySoundControls({required this.coordinator});
+
+  final _StudySoundCoordinator coordinator;
+
+  @override
+  Widget build(BuildContext context) {
+    return ListenableBuilder(
+      listenable: coordinator,
+      builder: (context, _) {
+        return Material(
+          type: MaterialType.transparency,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: coordinator.tracks
+                    .map(
+                      (track) => ChoiceChip(
+                        label: Text(track.label),
+                        selected: coordinator.selected?.id == track.id,
+                        onSelected: (_) => coordinator.toggle(track),
+                      ),
+                    )
+                    .toList(growable: false),
+              ),
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  IconButton.filled(
+                    tooltip: coordinator.playing ? 'Pause' : 'Play',
+                    icon: Icon(
+                      coordinator.playing ? Icons.pause : Icons.play_arrow,
+                    ),
+                    onPressed: coordinator.selected == null
+                        ? null
+                        : () => coordinator.toggle(coordinator.selected!),
+                  ),
+                  Expanded(
+                    child: Slider(
+                      value: coordinator.volume,
+                      onChanged: coordinator.setVolume,
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
 }
 
 class BackgroundSoundView extends StatefulWidget {
@@ -2894,6 +4416,16 @@ class StudyBackground {
   final ImageProvider? image;
   final List<Color> gradientColors;
   final double maskOpacity;
+
+  StudyBackground withMaskOpacity(double maskOpacity) {
+    return StudyBackground._(
+      type: type,
+      color: color,
+      image: image,
+      gradientColors: gradientColors,
+      maskOpacity: maskOpacity,
+    );
+  }
 }
 
 class StudyBackgroundLayer extends StatelessWidget {
@@ -3153,11 +4685,135 @@ class _CompanionAvatar extends StatelessWidget {
   }
 }
 
+class StudyStorageScope {
+  factory StudyStorageScope.user({
+    required String userId,
+    String namespace = 'default',
+  }) {
+    final normalizedUserId = userId.trim();
+    if (normalizedUserId.isEmpty) {
+      throw ArgumentError.value(userId, 'userId', 'User id cannot be empty');
+    }
+    return StudyStorageScope._(
+      namespace: _normalizeNamespace(namespace),
+      userId: normalizedUserId,
+      isGuest: false,
+    );
+  }
+
+  factory StudyStorageScope.guest({String namespace = 'default'}) {
+    return StudyStorageScope._(
+      namespace: _normalizeNamespace(namespace),
+      userId: '',
+      isGuest: true,
+    );
+  }
+
+  const StudyStorageScope._({
+    required this.namespace,
+    required this.userId,
+    required this.isGuest,
+  });
+
+  final String namespace;
+  final String userId;
+  final bool isGuest;
+
+  String get storagePrefix {
+    final namespacePart = _encodeKeyPart(namespace);
+    final identityPart = isGuest ? 'guest' : 'user:${_encodeKeyPart(userId)}';
+    return 'study_focus:v2:$namespacePart:$identityPart';
+  }
+
+  String get migrationMarker {
+    return 'study_focus:v2:migration:${_encodeKeyPart(namespace)}';
+  }
+
+  static String _normalizeNamespace(String namespace) {
+    final normalized = namespace.trim();
+    if (normalized.isEmpty) {
+      throw ArgumentError.value(
+        namespace,
+        'namespace',
+        'Namespace cannot be empty',
+      );
+    }
+    return normalized;
+  }
+
+  static String _encodeKeyPart(String value) {
+    return base64Url.encode(utf8.encode(value)).replaceAll('=', '');
+  }
+}
+
 class SharedPreferencesStudyStore implements StudyStore {
-  SharedPreferencesStudyStore(this.preferences, {this.prefix = 'study_focus'});
+  SharedPreferencesStudyStore(this.preferences, {required this.scope});
+
+  static Future<void>? _activeMigration;
+  static final _taskMutations = <String, Future<void>>{};
 
   final SharedPreferences preferences;
-  final String prefix;
+  final StudyStorageScope scope;
+  final _changes = StreamController<StudyStoreChange>.broadcast(sync: true);
+
+  @override
+  Stream<StudyStoreChange> get changes => _changes.stream;
+
+  static Future<void> migrateLegacyData(
+    SharedPreferences preferences, {
+    required StudyStorageScope scope,
+  }) {
+    if (scope.isGuest || preferences.getBool(scope.migrationMarker) == true) {
+      return Future<void>.value();
+    }
+    final running = _activeMigration;
+    if (running != null) {
+      return running.then((_) => migrateLegacyData(preferences, scope: scope));
+    }
+    final migration = _performLegacyMigration(preferences, scope);
+    _activeMigration = migration;
+    return migration.whenComplete(() {
+      if (identical(_activeMigration, migration)) {
+        _activeMigration = null;
+      }
+    });
+  }
+
+  static Future<void> _performLegacyMigration(
+    SharedPreferences preferences,
+    StudyStorageScope scope,
+  ) async {
+    final legacyKeys = preferences
+        .getKeys()
+        .where(
+          (key) =>
+              key.startsWith('study_focus:goal:') ||
+              key.startsWith('study_focus:record:') ||
+              key.startsWith('study_focus:task:'),
+        )
+        .toList(growable: false);
+    for (final legacyKey in legacyKeys) {
+      final suffix = legacyKey.substring('study_focus:'.length);
+      final targetKey = '${scope.storagePrefix}:$suffix';
+      final value = preferences.getString(legacyKey);
+      if (value != null && !preferences.containsKey(targetKey)) {
+        final copied = await preferences.setString(targetKey, value);
+        if (!copied) {
+          throw StateError('Failed to migrate local study data');
+        }
+      }
+    }
+    for (final legacyKey in legacyKeys) {
+      final removed = await preferences.remove(legacyKey);
+      if (!removed) {
+        throw StateError('Failed to remove migrated local study data');
+      }
+    }
+    final marked = await preferences.setBool(scope.migrationMarker, true);
+    if (!marked) {
+      throw StateError('Failed to finish local study data migration');
+    }
+  }
 
   @override
   Future<TodayGoal> loadTodayGoal(DateTime date) async {
@@ -3170,7 +4826,8 @@ class SharedPreferencesStudyStore implements StudyStore {
 
   @override
   Future<void> saveTodayGoal(DateTime date, TodayGoal goal) async {
-    await preferences.setString(_goalKey(date), jsonEncode(goal.toJson()));
+    await _writeString(_goalKey(date), jsonEncode(goal.toJson()));
+    _changes.add(StudyStoreChange(StudyStoreChangeKind.goal, date: date));
   }
 
   @override
@@ -3199,9 +4856,9 @@ class SharedPreferencesStudyStore implements StudyStore {
 
   @override
   Future<void> saveDayRecord(StudyDayRecord record) async {
-    await preferences.setString(
-      _recordKey(record.date),
-      jsonEncode(record.toJson()),
+    await _writeString(_recordKey(record.date), jsonEncode(record.toJson()));
+    _changes.add(
+      StudyStoreChange(StudyStoreChangeKind.dayRecord, date: record.date),
     );
   }
 
@@ -3235,24 +4892,84 @@ class SharedPreferencesStudyStore implements StudyStore {
 
   @override
   Future<void> saveTaskRecord(DateTime date, StudyTaskRecord task) async {
-    final tasks = List<StudyTaskRecord>.of(await loadTaskRecords(date));
-    final index = tasks.indexWhere((existing) => existing.id == task.id);
-    if (index == -1) {
-      tasks.add(task);
-    } else {
-      tasks[index] = task;
+    return _serializeTaskMutation(() async {
+      final tasks = List<StudyTaskRecord>.of(await loadTaskRecords(date));
+      final index = tasks.indexWhere((existing) => existing.id == task.id);
+      if (index == -1) {
+        tasks.add(task);
+      } else {
+        tasks[index] = task;
+      }
+      await _saveTasks(date, tasks);
+      _changes.add(StudyStoreChange(StudyStoreChangeKind.tasks, date: date));
+    });
+  }
+
+  @override
+  Future<void> deleteTaskRecord(DateTime date, String taskId) {
+    return _serializeTaskMutation(() async {
+      final tasks = List<StudyTaskRecord>.of(await loadTaskRecords(date))
+        ..removeWhere((task) => task.id == taskId);
+      await _saveTasks(date, tasks);
+      _changes.add(StudyStoreChange(StudyStoreChangeKind.tasks, date: date));
+    });
+  }
+
+  @override
+  Future<StudyFocusSettings> loadSettings() async {
+    final raw = preferences.getString(_settingsKey);
+    if (raw == null) {
+      return StudyFocusSettings();
     }
-    await preferences.setString(
+    try {
+      return StudyFocusSettings.fromJson(
+        jsonDecode(raw) as Map<String, dynamic>,
+      );
+    } catch (_) {
+      return StudyFocusSettings();
+    }
+  }
+
+  @override
+  Future<void> saveSettings(StudyFocusSettings settings) async {
+    await _writeString(_settingsKey, jsonEncode(settings.toJson()));
+    _changes.add(StudyStoreChange(StudyStoreChangeKind.settings));
+  }
+
+  Future<void> _saveTasks(DateTime date, List<StudyTaskRecord> tasks) {
+    return _writeString(
       _taskKey(date),
       jsonEncode(tasks.map((task) => task.toJson()).toList(growable: false)),
     );
   }
 
-  String _goalKey(DateTime date) => '$prefix:goal:${_dateKey(date)}';
+  Future<void> _serializeTaskMutation(Future<void> Function() action) {
+    final mutationKey = scope.storagePrefix;
+    final previous = _taskMutations[mutationKey] ?? Future<void>.value();
+    final operation = previous.then((_) => action());
+    _taskMutations[mutationKey] = operation.then<void>(
+      (_) {},
+      onError: (_, __) {},
+    );
+    return operation;
+  }
 
-  String _recordKey(DateTime date) => '$prefix:record:${_dateKey(date)}';
+  Future<void> _writeString(String key, String value) async {
+    if (!await preferences.setString(key, value)) {
+      throw StateError('Failed to persist local study data');
+    }
+  }
 
-  String _taskKey(DateTime date) => '$prefix:task:${_dateKey(date)}';
+  String _goalKey(DateTime date) =>
+      '${scope.storagePrefix}:goal:${_dateKey(date)}';
+
+  String _recordKey(DateTime date) =>
+      '${scope.storagePrefix}:record:${_dateKey(date)}';
+
+  String _taskKey(DateTime date) =>
+      '${scope.storagePrefix}:task:${_dateKey(date)}';
+
+  String get _settingsKey => '${scope.storagePrefix}:settings';
 }
 
 DateTime _dateOnly(DateTime date) => DateTime(date.year, date.month, date.day);
