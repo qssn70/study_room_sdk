@@ -1,11 +1,11 @@
 import { Module } from '@nestjs/common';
-import { AuthModule } from '../auth/auth.module';
 import { RealtimeModule } from '../realtime/realtime.module';
+import { RoomsStateModule } from '../rooms/rooms-state.module';
 import { ChatController } from './chat.controller';
 import { ChatService } from './chat.service';
 
 @Module({
-  imports: [AuthModule, RealtimeModule],
+  imports: [RoomsStateModule, RealtimeModule],
   controllers: [ChatController],
   providers: [ChatService],
   exports: [ChatService],

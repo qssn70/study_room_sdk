@@ -10,7 +10,7 @@ async function bootstrap() {
   const config = new DocumentBuilder()
     .setTitle('Study Room API')
     .setDescription('Reference backend contract for the Flutter study room SDK.')
-    .setVersion('0.1.0')
+    .setVersion('0.3.0')
     .addBearerAuth()
     .build();
   const document = SwaggerModule.createDocument(app, config);

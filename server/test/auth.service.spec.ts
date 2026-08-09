@@ -30,5 +30,26 @@ describe('AuthService', () => {
       'JWT is missing required claims',
     );
   });
+
+  it('rejects unsigned, expired, and non-HS256-compatible tokens', async () => {
+    const service = new AuthService('secret');
+    const expired = jwt.sign(
+      { sub: 'user-1', appId: 'app-1', displayName: 'Lin', avatarUrl: '' },
+      'secret',
+      { expiresIn: -1 },
+    );
+    const withoutExpiry = jwt.sign(
+      { sub: 'user-1', appId: 'app-1', displayName: 'Lin', avatarUrl: '' },
+      'secret',
+    );
+
+    await expect(service.verifyBearer(`Bearer ${expired}`)).rejects.toThrow('Invalid or expired JWT');
+    await expect(service.verifyBearer(`Bearer ${withoutExpiry}`)).rejects.toThrow(
+      'JWT is missing required claims',
+    );
+    await expect(service.verifyBearer('Bearer not-a-token')).rejects.toThrow(
+      'Invalid or expired JWT',
+    );
+  });
 });
 

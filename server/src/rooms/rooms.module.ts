@@ -1,13 +1,10 @@
 import { Module } from '@nestjs/common';
-import { AuthModule } from '../auth/auth.module';
 import { RealtimeModule } from '../realtime/realtime.module';
 import { RoomsController } from './rooms.controller';
-import { RoomsService } from './rooms.service';
+import { RoomsStateModule } from './rooms-state.module';
 
 @Module({
-  imports: [AuthModule, RealtimeModule],
+  imports: [RoomsStateModule, RealtimeModule],
   controllers: [RoomsController],
-  providers: [RoomsService],
-  exports: [RoomsService],
 })
 export class RoomsModule {}

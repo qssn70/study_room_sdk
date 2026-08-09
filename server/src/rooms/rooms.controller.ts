@@ -1,6 +1,7 @@
-import { Body, Controller, Get, Headers, Param, Post } from '@nestjs/common';
+import { Body, Controller, Get, Param, Post } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
-import { AuthService } from '../auth/auth.service';
+import { CurrentIdentity } from '../auth/current-identity.decorator';
+import { ExternalIdentity } from '../domain';
 import { RealtimeGateway } from '../realtime/realtime.gateway';
 import { RoomsService } from './rooms.service';
 
@@ -9,7 +10,6 @@ import { RoomsService } from './rooms.service';
 @Controller('rooms')
 export class RoomsController {
   constructor(
-    private readonly auth: AuthService,
     private readonly rooms: RoomsService,
     private readonly realtime: RealtimeGateway,
   ) {}
@@ -17,36 +17,31 @@ export class RoomsController {
   @Get(':roomId')
   async getRoom(
     @Param('roomId') roomId: string,
-    @Headers('authorization') authorization?: string,
+    @CurrentIdentity() identity: ExternalIdentity,
   ) {
-    const identity = await this.auth.verifyBearer(authorization);
-    return this.rooms.getRoom(roomId, identity.appId);
+    return this.rooms.getRoom(roomId, identity);
   }
 
   @Post(':roomId/join')
   async joinRoom(
     @Param('roomId') roomId: string,
-    @Headers('authorization') authorization?: string,
+    @CurrentIdentity() identity: ExternalIdentity,
   ) {
-    const identity = await this.auth.verifyBearer(authorization);
     const room = await this.rooms.joinRoom(roomId, identity);
     this.realtime.publish(identity.appId, roomId, 'room.state', room);
-    this.realtime.publish(identity.appId, roomId, 'member.updated', {
-      id: identity.userId,
-      displayName: identity.displayName,
-      avatarUrl: identity.avatarUrl,
-      status: 'online',
-    });
+    const member = room.members.find((candidate) => candidate.id === identity.userId);
+    if (member) {
+      this.realtime.publish(identity.appId, roomId, 'member.updated', member);
+    }
     return room;
   }
 
   @Post(':roomId/leave')
   async leaveRoom(
     @Param('roomId') roomId: string,
-    @Headers('authorization') authorization?: string,
+    @CurrentIdentity() identity: ExternalIdentity,
     @Body() _body: Record<string, unknown> = {},
   ) {
-    const identity = await this.auth.verifyBearer(authorization);
     const room = await this.rooms.leaveRoom(roomId, identity);
     this.realtime.publish(identity.appId, roomId, 'room.state', room);
     this.realtime.publish(identity.appId, roomId, 'member.updated', {

@@ -1,6 +1,7 @@
-import { Controller, Headers, Param, Post } from '@nestjs/common';
+import { Controller, Param, Post } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
-import { AuthService } from '../auth/auth.service';
+import { CurrentIdentity } from '../auth/current-identity.decorator';
+import { ExternalIdentity } from '../domain';
 import { RealtimeGateway } from '../realtime/realtime.gateway';
 import { SessionsService } from './sessions.service';
 
@@ -9,7 +10,6 @@ import { SessionsService } from './sessions.service';
 @Controller()
 export class SessionsController {
   constructor(
-    private readonly auth: AuthService,
     private readonly sessions: SessionsService,
     private readonly realtime: RealtimeGateway,
   ) {}
@@ -17,32 +17,44 @@ export class SessionsController {
   @Post('rooms/:roomId/sessions/start')
   async start(
     @Param('roomId') roomId: string,
-    @Headers('authorization') authorization?: string,
+    @CurrentIdentity() identity: ExternalIdentity,
   ) {
-    const identity = await this.auth.verifyBearer(authorization);
     const session = await this.sessions.start(roomId, identity);
     this.realtime.publish(identity.appId, roomId, 'session.updated', session);
+    this.realtime.publishMemberPresence(session.appId, session.roomId, session.userId);
     return session;
   }
 
   @Post('sessions/:sessionId/pause')
-  async pause(@Param('sessionId') sessionId: string) {
-    const session = await this.sessions.pause(sessionId);
+  async pause(
+    @Param('sessionId') sessionId: string,
+    @CurrentIdentity() identity: ExternalIdentity,
+  ) {
+    const session = await this.sessions.pause(sessionId, identity);
     this.realtime.publish(session.appId, session.roomId, 'session.updated', session);
+    this.realtime.publishMemberPresence(session.appId, session.roomId, session.userId);
     return session;
   }
 
   @Post('sessions/:sessionId/resume')
-  async resume(@Param('sessionId') sessionId: string) {
-    const session = await this.sessions.resume(sessionId);
+  async resume(
+    @Param('sessionId') sessionId: string,
+    @CurrentIdentity() identity: ExternalIdentity,
+  ) {
+    const session = await this.sessions.resume(sessionId, identity);
     this.realtime.publish(session.appId, session.roomId, 'session.updated', session);
+    this.realtime.publishMemberPresence(session.appId, session.roomId, session.userId);
     return session;
   }
 
   @Post('sessions/:sessionId/finish')
-  async finish(@Param('sessionId') sessionId: string) {
-    const session = await this.sessions.finish(sessionId);
+  async finish(
+    @Param('sessionId') sessionId: string,
+    @CurrentIdentity() identity: ExternalIdentity,
+  ) {
+    const session = await this.sessions.finish(sessionId, identity);
     this.realtime.publish(session.appId, session.roomId, 'session.updated', session);
+    this.realtime.publishMemberPresence(session.appId, session.roomId, session.userId);
     return session;
   }
 }
