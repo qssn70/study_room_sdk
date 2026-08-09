@@ -1,10 +1,10 @@
 import { Module } from '@nestjs/common';
-import { RealtimeModule } from '../realtime/realtime.module';
 import { RoomsController } from './rooms.controller';
-import { RoomsStateModule } from './rooms-state.module';
+import { RoomsService } from './rooms.service';
 
 @Module({
-  imports: [RoomsStateModule, RealtimeModule],
   controllers: [RoomsController],
+  providers: [RoomsService],
+  exports: [RoomsService],
 })
 export class RoomsModule {}

@@ -1,19 +1,24 @@
-FROM node:22-alpine AS deps
+FROM node:22-alpine AS build
+
 WORKDIR /app
-COPY package*.json ./
+COPY package.json package-lock.json ./
+COPY server/package.json ./server/package.json
 RUN npm ci
 
-FROM deps AS build
-COPY tsconfig*.json ./
-COPY src ./src
-RUN npm run build
+COPY contracts ./contracts
+COPY server ./server
+RUN npm --workspace study-room-server run db:generate \
+    && npm --workspace study-room-server run build
 
 FROM node:22-alpine AS runtime
-WORKDIR /app
 ENV NODE_ENV=production
-COPY package*.json ./
-RUN npm ci --omit=dev
-COPY --from=build /app/dist ./dist
-EXPOSE 3000
+WORKDIR /app
+COPY --from=build /app/node_modules ./node_modules
+COPY --from=build /app/contracts ./contracts
+COPY --from=build /app/server/dist ./server/dist
+COPY --from=build /app/server/package.json ./server/package.json
+COPY --from=build /app/server/prisma ./server/prisma
+COPY --from=build /app/server/tool ./server/tool
+WORKDIR /app/server
+USER node
 CMD ["node", "dist/main.js"]
-

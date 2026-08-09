@@ -1,37 +1,155 @@
+x-api-environment: &api-environment
+  NODE_ENV: production
+  PORT: 3000
+  DATABASE_URL: postgresql://${POSTGRES_USER:-study_room}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-study_room}
+  REDIS_URL: redis://redis:6379
+  STUDY_ROOM_ALLOWED_ORIGINS: ${STUDY_ROOM_ALLOWED_ORIGINS:-http://localhost:8080,http://localhost:3000}
+  STUDY_ROOM_ADMIN_JWKS_URL: http://jwks:4000/admin/jwks.json
+  STUDY_ROOM_ADMIN_JWT_ISSUER: http://jwks:4000/admin
+  STUDY_ROOM_ADMIN_JWT_AUDIENCE: study-room-admin
+  STUDY_ROOM_ALLOW_INSECURE_JWKS: "true"
+  STUDY_ROOM_TRUST_PROXY_HOPS: 1
+  STUDY_ROOM_JWKS_CACHE_MS: ${STUDY_ROOM_JWKS_CACHE_MS:-300000}
+  STUDY_ROOM_PRESENCE_TTL_SECONDS: ${STUDY_ROOM_PRESENCE_TTL_SECONDS:-60}
+  STUDY_ROOM_PRESENCE_REFRESH_SECONDS: ${STUDY_ROOM_PRESENCE_REFRESH_SECONDS:-20}
+  OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: ${OTEL_EXPORTER_OTLP_TRACES_ENDPOINT:-}
+
+x-api: &api
+  build:
+    context: .
+    dockerfile: server/Dockerfile
+  environment: *api-environment
+  restart: unless-stopped
+  depends_on:
+    seed:
+      condition: service_completed_successfully
+    redis:
+      condition: service_healthy
+    jwks:
+      condition: service_healthy
+  healthcheck:
+    test: ["CMD", "node", "-e", "fetch('http://localhost:3000/health/ready').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+    interval: 10s
+    timeout: 5s
+    retries: 6
+    start_period: 10s
+
 services:
-  api:
+  api-1:
+    <<: *api
+
+  api-2:
+    <<: *api
+
+  migrate:
     build:
-      context: ./server
-    environment:
-      PORT: 3000
-      STUDY_ROOM_JWT_SECRET: dev-secret
-      DATABASE_URL: postgres://study_room:study_room@postgres:5432/study_room
-      REDIS_URL: redis://redis:6379
-    ports:
-      - "3000:3000"
+      context: .
+      dockerfile: server/Dockerfile
+    environment: *api-environment
+    command: ["../node_modules/.bin/prisma", "migrate", "deploy", "--schema", "prisma/schema.prisma"]
     depends_on:
-      - postgres
-      - redis
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  seed:
+    build:
+      context: .
+      dockerfile: server/Dockerfile
+    environment: *api-environment
+    command: ["node", "prisma/seed.mjs"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      jwks:
+        condition: service_healthy
+    restart: "no"
+
+  proxy:
+    image: nginx:1.27-alpine
+    ports:
+      - "${STUDY_ROOM_HTTP_PORT:-3000}:8080"
+    volumes:
+      - ./deploy/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      api-1:
+        condition: service_healthy
+      api-2:
+        condition: service_healthy
+    restart: unless-stopped
 
   postgres:
     image: postgres:16-alpine
     environment:
-      POSTGRES_USER: study_room
-      POSTGRES_PASSWORD: study_room
-      POSTGRES_DB: study_room
-    ports:
-      - "5432:5432"
+      POSTGRES_USER: ${POSTGRES_USER:-study_room}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-study_room}
     volumes:
       - study_room_postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    restart: unless-stopped
 
   redis:
     image: redis:7-alpine
-    ports:
-      - "6379:6379"
+    command: ["redis-server", "--appendonly", "yes"]
     volumes:
       - study_room_redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    restart: unless-stopped
+
+  jwks:
+    image: node:22-alpine
+    command: ["node", "/fixture/dev-jwks.mjs"]
+    environment:
+      PORT: 4000
+      E2E_FIXTURE_CONTROL_TOKEN: ${E2E_FIXTURE_CONTROL_TOKEN:-local-fixture-control}
+      E2E_ALLOW_SHORT_LIVED_TOKENS: ${E2E_ALLOW_SHORT_LIVED_TOKENS:-false}
+    ports:
+      - "127.0.0.1:${STUDY_ROOM_JWKS_PORT:-4000}:4000"
+    volumes:
+      - ./server/tool/dev-jwks.mjs:/fixture/dev-jwks.mjs:ro
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:4000/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    restart: unless-stopped
+
+  e2e:
+    profiles: ["test"]
+    build:
+      context: .
+      dockerfile: server/Dockerfile
+    user: "0:0"
+    environment:
+      E2E_API_1: http://api-1:3000
+      E2E_API_2: http://api-2:3000
+      E2E_JWKS: http://jwks:4000
+      E2E_FIXTURE_CONTROL_TOKEN: ${E2E_FIXTURE_CONTROL_TOKEN:-local-fixture-control}
+      E2E_RUN_ID: ${E2E_RUN_ID:-local}
+      E2E_STATE_PATH: /state/persistence.json
+      E2E_JWKS_RETIRE_WAIT_MS: ${E2E_JWKS_RETIRE_WAIT_MS:-302000}
+      E2E_PRESENCE_EXPIRE_WAIT_MS: ${E2E_PRESENCE_EXPIRE_WAIT_MS:-62000}
+      REDIS_URL: redis://redis:6379
+    volumes:
+      - study_room_e2e_state:/state
+    command: ["node", "tool/e2e-two-instance.mjs"]
+    depends_on:
+      api-1:
+        condition: service_healthy
+      api-2:
+        condition: service_healthy
+    restart: "no"
 
 volumes:
   study_room_postgres:
   study_room_redis:
-
+  study_room_e2e_state:

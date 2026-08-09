@@ -1,0 +1,786 @@
+openapi: 3.1.0
+info:
+  title: Study Room API
+  version: 0.4.0-beta.1
+  description: Authoritative HTTP contract for the Study Room reference backend.
+servers:
+  - url: http://localhost:3000
+tags:
+  - { name: Applications }
+  - { name: Rooms }
+  - { name: Join Requests }
+  - { name: Members }
+  - { name: Sessions }
+  - { name: Chat }
+  - { name: Operations }
+paths:
+  /admin/v1/apps:
+    get:
+      tags: [Applications]
+      operationId: listApplications
+      security: [{ adminBearer: [] }]
+      x-required-scopes: [apps:manage]
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Applications
+          headers: { x-request-id: { $ref: '#/components/headers/RequestId' } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApplicationPage' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+        '500': { $ref: '#/components/responses/InternalServerError' }
+    post:
+      tags: [Applications]
+      operationId: createApplication
+      security: [{ adminBearer: [] }]
+      x-required-scopes: [apps:manage]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateApplicationRequest' }
+      responses:
+        '201':
+          description: Created application
+          headers: { x-request-id: { $ref: '#/components/headers/RequestId' } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Application' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+        '500': { $ref: '#/components/responses/InternalServerError' }
+  /admin/v1/apps/{appId}:
+    parameters:
+      - $ref: '#/components/parameters/AppId'
+    get:
+      tags: [Applications]
+      operationId: getApplication
+      security: [{ adminBearer: [] }]
+      x-required-scopes: [apps:manage]
+      responses:
+        '200':
+          description: Application
+          headers: { x-request-id: { $ref: '#/components/headers/RequestId' } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Application' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+        '500': { $ref: '#/components/responses/InternalServerError' }
+    patch:
+      tags: [Applications]
+      operationId: updateApplication
+      security: [{ adminBearer: [] }]
+      x-required-scopes: [apps:manage]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UpdateApplicationRequest' }
+      responses:
+        '200':
+          description: Updated application
+          headers: { x-request-id: { $ref: '#/components/headers/RequestId' } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Application' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+        '500': { $ref: '#/components/responses/InternalServerError' }
+  /v1/rooms:
+    get:
+      tags: [Rooms]
+      operationId: listRooms
+      security: [{ userBearer: [] }]
+      parameters:
+        - $ref: '#/components/parameters/UuidCursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Joined rooms
+          headers: { x-request-id: { $ref: '#/components/headers/RequestId' } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RoomPage' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+        '500': { $ref: '#/components/responses/InternalServerError' }
+    post:
+      tags: [Rooms]
+      operationId: createRoom
+      security: [{ userBearer: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateRoomRequest' }
+      responses:
+        '201':
+          description: Created room
+          headers: { x-request-id: { $ref: '#/components/headers/RequestId' } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Room' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+        '500': { $ref: '#/components/responses/InternalServerError' }
+  /v1/rooms/{roomId}:
+    parameters:
+      - $ref: '#/components/parameters/RoomId'
+    get:
+      tags: [Rooms]
+      operationId: getRoom
+      security: [{ userBearer: [] }]
+      responses:
+        '200':
+          description: Room state
+          headers: { x-request-id: { $ref: '#/components/headers/RequestId' } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Room' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+        '500': { $ref: '#/components/responses/InternalServerError' }
+    delete:
+      tags: [Rooms]
+      operationId: deleteRoom
+      security: [{ userBearer: [] }]
+      responses:
+        '204':
+          description: Deleted
+          headers: { x-request-id: { $ref: '#/components/headers/RequestId' } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+        '500': { $ref: '#/components/responses/InternalServerError' }
+  /v1/rooms/{roomId}/join-requests:
+    parameters:
+      - $ref: '#/components/parameters/RoomId'
+    get:
+      tags: [Join Requests]
+      operationId: listRoomJoinRequests
+      security: [{ userBearer: [] }]
+      parameters:
+        - $ref: '#/components/parameters/UuidCursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Pending requests, ordered oldest first
+          headers: { x-request-id: { $ref: '#/components/headers/RequestId' } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/JoinRequestPage' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+        '500': { $ref: '#/components/responses/InternalServerError' }
+    post:
+      tags: [Join Requests]
+      operationId: requestRoomAccess
+      security: [{ userBearer: [] }]
+      responses:
+        '201':
+          description: Join request
+          headers: { x-request-id: { $ref: '#/components/headers/RequestId' } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/JoinRequest' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+        '500': { $ref: '#/components/responses/InternalServerError' }
+    delete:
+      tags: [Join Requests]
+      operationId: cancelRoomAccessRequest
+      security: [{ userBearer: [] }]
+      responses:
+        '204':
+          description: Cancelled
+          headers: { x-request-id: { $ref: '#/components/headers/RequestId' } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+        '500': { $ref: '#/components/responses/InternalServerError' }
+  /v1/rooms/{roomId}/join-requests/{requestId}:
+    parameters:
+      - $ref: '#/components/parameters/RoomId'
+      - $ref: '#/components/parameters/RequestId'
+    patch:
+      tags: [Join Requests]
+      operationId: decideJoinRequest
+      security: [{ userBearer: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/DecideJoinRequestRequest' }
+      responses:
+        '200':
+          description: Decided request
+          headers: { x-request-id: { $ref: '#/components/headers/RequestId' } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/JoinRequest' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+        '500': { $ref: '#/components/responses/InternalServerError' }
+  /v1/join-requests:
+    get:
+      tags: [Join Requests]
+      operationId: listMyJoinRequests
+      description: Returns all statuses ordered newest first.
+      security: [{ userBearer: [] }]
+      parameters:
+        - $ref: '#/components/parameters/UuidCursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Current user's requests
+          headers: { x-request-id: { $ref: '#/components/headers/RequestId' } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/JoinRequestPage' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+        '500': { $ref: '#/components/responses/InternalServerError' }
+  /v1/rooms/{roomId}/members/{userId}:
+    parameters:
+      - $ref: '#/components/parameters/RoomId'
+      - $ref: '#/components/parameters/UserId'
+    delete:
+      tags: [Members]
+      operationId: removeRoomMember
+      security: [{ userBearer: [] }]
+      responses:
+        '204':
+          description: Removed
+          headers: { x-request-id: { $ref: '#/components/headers/RequestId' } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+        '500': { $ref: '#/components/responses/InternalServerError' }
+  /v1/rooms/{roomId}/members/me:
+    parameters:
+      - $ref: '#/components/parameters/RoomId'
+    delete:
+      tags: [Members]
+      operationId: leaveRoom
+      security: [{ userBearer: [] }]
+      responses:
+        '204':
+          description: Left
+          headers: { x-request-id: { $ref: '#/components/headers/RequestId' } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+        '500': { $ref: '#/components/responses/InternalServerError' }
+  /v1/rooms/{roomId}/owner:
+    parameters:
+      - $ref: '#/components/parameters/RoomId'
+    put:
+      tags: [Members]
+      operationId: transferRoomOwnership
+      security: [{ userBearer: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TransferOwnershipRequest' }
+      responses:
+        '200':
+          description: Updated room
+          headers: { x-request-id: { $ref: '#/components/headers/RequestId' } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Room' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+        '500': { $ref: '#/components/responses/InternalServerError' }
+  /v1/rooms/{roomId}/messages:
+    parameters:
+      - $ref: '#/components/parameters/RoomId'
+    get:
+      tags: [Chat]
+      operationId: listMessages
+      security: [{ userBearer: [] }]
+      parameters:
+        - $ref: '#/components/parameters/UuidCursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Messages in chronological order within the requested newest-first page
+          headers: { x-request-id: { $ref: '#/components/headers/RequestId' } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MessagePage' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+        '500': { $ref: '#/components/responses/InternalServerError' }
+    post:
+      tags: [Chat]
+      operationId: sendMessage
+      security: [{ userBearer: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SendMessageRequest' }
+      responses:
+        '201':
+          description: Message
+          headers: { x-request-id: { $ref: '#/components/headers/RequestId' } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ChatMessage' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+        '500': { $ref: '#/components/responses/InternalServerError' }
+  /v1/rooms/{roomId}/sessions:
+    parameters:
+      - $ref: '#/components/parameters/RoomId'
+    post:
+      tags: [Sessions]
+      operationId: startSession
+      security: [{ userBearer: [] }]
+      responses:
+        '201':
+          description: Session
+          headers: { x-request-id: { $ref: '#/components/headers/RequestId' } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/StudySession' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+        '500': { $ref: '#/components/responses/InternalServerError' }
+  /v1/rooms/{roomId}/active-sessions:
+    parameters:
+      - $ref: '#/components/parameters/RoomId'
+    get:
+      tags: [Sessions]
+      operationId: listActiveSessions
+      description: Returns running and paused sessions ordered by updatedAt descending, then id descending.
+      security: [{ userBearer: [] }]
+      parameters:
+        - $ref: '#/components/parameters/UuidCursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Active sessions
+          headers: { x-request-id: { $ref: '#/components/headers/RequestId' } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SessionPage' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+        '500': { $ref: '#/components/responses/InternalServerError' }
+  /v1/sessions/{sessionId}:
+    parameters:
+      - $ref: '#/components/parameters/SessionId'
+    patch:
+      tags: [Sessions]
+      operationId: updateSession
+      security: [{ userBearer: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UpdateSessionRequest' }
+      responses:
+        '200':
+          description: Session
+          headers: { x-request-id: { $ref: '#/components/headers/RequestId' } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/StudySession' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+        '500': { $ref: '#/components/responses/InternalServerError' }
+  /health/live:
+    get:
+      tags: [Operations]
+      operationId: getLiveness
+      security: []
+      responses:
+        '200':
+          description: Process is alive
+          headers: { x-request-id: { $ref: '#/components/headers/RequestId' } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LivenessResponse' }
+        '500': { $ref: '#/components/responses/InternalServerError' }
+  /health/ready:
+    get:
+      tags: [Operations]
+      operationId: getReadiness
+      security: []
+      responses:
+        '200':
+          description: Dependencies are ready
+          headers: { x-request-id: { $ref: '#/components/headers/RequestId' } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ReadinessResponse' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /metrics:
+    get:
+      tags: [Operations]
+      operationId: getMetrics
+      security: [{ adminBearer: [] }]
+      x-required-scopes: [metrics:read]
+      responses:
+        '200':
+          description: Prometheus exposition format
+          headers: { x-request-id: { $ref: '#/components/headers/RequestId' } }
+          content:
+            text/plain:
+              schema: { $ref: '#/components/schemas/MetricsResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+        '500': { $ref: '#/components/responses/InternalServerError' }
+components:
+  securitySchemes:
+    userBearer:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Per-application RS256 or ES256 JWT containing sub, appId, displayName, iss, aud and exp.
+    adminBearer:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Administrator JWT verified with the independent administrator JWKS; required scopes are declared by x-required-scopes on each operation.
+  parameters:
+    AppId:
+      name: appId
+      in: path
+      required: true
+      schema: { $ref: '#/components/schemas/AppId' }
+    RoomId:
+      name: roomId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    RequestId:
+      name: requestId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    SessionId:
+      name: sessionId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    UserId:
+      name: userId
+      in: path
+      required: true
+      schema: { type: string, minLength: 1, maxLength: 256 }
+    Cursor:
+      name: cursor
+      in: query
+      schema: { type: string, minLength: 1, maxLength: 256 }
+    UuidCursor:
+      name: cursor
+      in: query
+      schema: { type: string, format: uuid }
+    Limit:
+      name: limit
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 100, default: 50 }
+  headers:
+    RequestId:
+      description: Request correlation identifier
+      schema: { type: string, minLength: 1, maxLength: 128 }
+  responses:
+    BadRequest:
+      description: Invalid request
+      headers: { x-request-id: { $ref: '#/components/headers/RequestId' } }
+      content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } }
+    Unauthorized:
+      description: Authentication failed
+      headers: { x-request-id: { $ref: '#/components/headers/RequestId' } }
+      content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } }
+    Forbidden:
+      description: Access denied
+      headers: { x-request-id: { $ref: '#/components/headers/RequestId' } }
+      content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } }
+    NotFound:
+      description: Resource not found
+      headers: { x-request-id: { $ref: '#/components/headers/RequestId' } }
+      content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } }
+    Conflict:
+      description: Resource state conflict
+      headers: { x-request-id: { $ref: '#/components/headers/RequestId' } }
+      content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } }
+    TooManyRequests:
+      description: Rate limit exceeded
+      headers: { x-request-id: { $ref: '#/components/headers/RequestId' } }
+      content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } }
+    InternalServerError:
+      description: Internal server error
+      headers: { x-request-id: { $ref: '#/components/headers/RequestId' } }
+      content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } }
+    ServiceUnavailable:
+      description: A required dependency is unavailable
+      headers: { x-request-id: { $ref: '#/components/headers/RequestId' } }
+      content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } }
+  schemas:
+    AppId:
+      type: string
+      pattern: '^[A-Za-z0-9._-]{1,64}$'
+    PresenceStatus:
+      type: string
+      enum: [online, focusing, idle, away, offline]
+    RoomRole:
+      type: string
+      enum: [owner, member]
+    JoinRequestStatus:
+      type: string
+      enum: [pending, approved, rejected, cancelled]
+    JoinRequestDecision:
+      type: string
+      enum: [approved, rejected]
+    SessionStatus:
+      type: string
+      enum: [running, paused, finished]
+    Application:
+      type: object
+      additionalProperties: false
+      required: [appId, issuer, audience, jwksUri, enabled, chatRetentionDays, sessionRetentionDays, createdAt, updatedAt]
+      properties:
+        appId: { $ref: '#/components/schemas/AppId' }
+        issuer: { type: string, minLength: 1 }
+        audience: { type: string, minLength: 1 }
+        jwksUri: { type: string, format: uri }
+        enabled: { type: boolean }
+        chatRetentionDays: { type: [integer, 'null'], minimum: 1 }
+        sessionRetentionDays: { type: [integer, 'null'], minimum: 1 }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    CreateApplicationRequest:
+      type: object
+      additionalProperties: false
+      required: [appId, issuer, audience, jwksUri]
+      properties:
+        appId: { $ref: '#/components/schemas/AppId' }
+        issuer: { type: string, minLength: 1 }
+        audience: { type: string, minLength: 1 }
+        jwksUri: { type: string, format: uri }
+        enabled: { type: boolean, default: true }
+        chatRetentionDays: { type: [integer, 'null'], minimum: 1 }
+        sessionRetentionDays: { type: [integer, 'null'], minimum: 1 }
+    UpdateApplicationRequest:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        issuer: { type: string, minLength: 1 }
+        audience: { type: string, minLength: 1 }
+        jwksUri: { type: string, format: uri }
+        enabled: { type: boolean }
+        chatRetentionDays: { type: [integer, 'null'], minimum: 1 }
+        sessionRetentionDays: { type: [integer, 'null'], minimum: 1 }
+    ApplicationPage:
+      type: object
+      additionalProperties: false
+      required: [items, nextCursor]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/Application' } }
+        nextCursor: { type: [string, 'null'], maxLength: 256 }
+    Member:
+      type: object
+      additionalProperties: false
+      required: [id, displayName, avatarUrl, role, status]
+      properties:
+        id: { type: string, minLength: 1 }
+        displayName: { type: string, minLength: 1 }
+        avatarUrl: { type: string }
+        role: { $ref: '#/components/schemas/RoomRole' }
+        status: { $ref: '#/components/schemas/PresenceStatus' }
+    Room:
+      type: object
+      additionalProperties: false
+      required: [id, appId, title, version, members]
+      properties:
+        id: { type: string, format: uuid }
+        appId: { $ref: '#/components/schemas/AppId' }
+        title: { type: string, minLength: 1, maxLength: 100 }
+        version: { type: integer, minimum: 1 }
+        members: { type: array, items: { $ref: '#/components/schemas/Member' } }
+    RoomPage:
+      type: object
+      additionalProperties: false
+      required: [items, nextCursor]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/Room' } }
+        nextCursor: { type: [string, 'null'], format: uuid }
+    JoinRequest:
+      type: object
+      additionalProperties: false
+      required: [id, roomId, userId, displayName, status, createdAt, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        roomId: { type: string, format: uuid }
+        userId: { type: string, minLength: 1 }
+        displayName: { type: string, minLength: 1 }
+        status: { $ref: '#/components/schemas/JoinRequestStatus' }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    JoinRequestPage:
+      type: object
+      additionalProperties: false
+      required: [items, nextCursor]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/JoinRequest' } }
+        nextCursor: { type: [string, 'null'], format: uuid }
+    ChatMessage:
+      type: object
+      additionalProperties: false
+      required: [id, roomId, senderId, senderName, text, sentAt]
+      properties:
+        id: { type: string, format: uuid }
+        roomId: { type: string, format: uuid }
+        senderId: { type: string, minLength: 1 }
+        senderName: { type: string, minLength: 1 }
+        text: { type: string, minLength: 1, maxLength: 2000 }
+        sentAt: { type: string, format: date-time }
+    MessagePage:
+      type: object
+      additionalProperties: false
+      required: [items, nextCursor]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/ChatMessage' } }
+        nextCursor: { type: [string, 'null'], format: uuid }
+    StudySession:
+      type: object
+      additionalProperties: false
+      required: [id, roomId, userId, status, startedAt, finishedAt, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        roomId: { type: string, format: uuid }
+        userId: { type: string, minLength: 1 }
+        status: { $ref: '#/components/schemas/SessionStatus' }
+        startedAt: { type: string, format: date-time }
+        finishedAt: { type: [string, 'null'], format: date-time }
+        updatedAt: { type: string, format: date-time }
+    SessionPage:
+      type: object
+      additionalProperties: false
+      required: [items, nextCursor]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/StudySession' } }
+        nextCursor: { type: [string, 'null'], format: uuid }
+    CreateRoomRequest:
+      type: object
+      additionalProperties: false
+      required: [title]
+      properties:
+        title: { type: string, minLength: 1, maxLength: 100 }
+    DecideJoinRequestRequest:
+      type: object
+      additionalProperties: false
+      required: [decision]
+      properties:
+        decision: { $ref: '#/components/schemas/JoinRequestDecision' }
+    TransferOwnershipRequest:
+      type: object
+      additionalProperties: false
+      required: [userId]
+      properties:
+        userId: { type: string, minLength: 1, maxLength: 256 }
+    SendMessageRequest:
+      type: object
+      additionalProperties: false
+      required: [text]
+      properties:
+        text: { type: string, minLength: 1, maxLength: 2000 }
+    UpdateSessionRequest:
+      type: object
+      additionalProperties: false
+      required: [status]
+      properties:
+        status: { $ref: '#/components/schemas/SessionStatus' }
+    ErrorResponse:
+      type: object
+      additionalProperties: false
+      required: [code, message, requestId]
+      properties:
+        code: { type: string, minLength: 1 }
+        message: { type: string, minLength: 1 }
+        details: {}
+        requestId: { type: string, minLength: 1, maxLength: 128 }
+    LivenessResponse:
+      type: object
+      additionalProperties: false
+      required: [status]
+      properties:
+        status: { type: string, const: ok }
+    ReadinessResponse:
+      type: object
+      additionalProperties: false
+      required: [status]
+      properties:
+        status: { type: string, const: ready }
+    MetricsResponse:
+      type: string

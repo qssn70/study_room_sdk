@@ -1,0 +1,192 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/qssn70/study_room_sdk/contracts/realtime-events.schema.json",
+  "title": "StudyRoomRealtimeEvent",
+  "description": "Authoritative schema for events emitted as study-room.event on /v1/realtime. roomVersion is null when an event does not mutate the structural room version.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "eventId", "type", "roomId", "roomVersion", "occurredAt", "payload"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "eventId": { "type": "string", "format": "uuid" },
+    "type": {
+      "enum": [
+        "room.state",
+        "membership.updated",
+        "join-request.created",
+        "join-request.updated",
+        "member.presence.updated",
+        "chat.message.created",
+        "session.updated"
+      ]
+    },
+    "roomId": { "type": ["string", "null"], "format": "uuid" },
+    "roomVersion": { "type": ["integer", "null"], "minimum": 1 },
+    "occurredAt": { "type": "string", "format": "date-time" },
+    "payload": { "type": "object" }
+  },
+  "oneOf": [
+    { "$ref": "#/$defs/RoomStateEvent" },
+    { "$ref": "#/$defs/MembershipUpdatedEvent" },
+    { "$ref": "#/$defs/JoinRequestCreatedEvent" },
+    { "$ref": "#/$defs/JoinRequestUpdatedEvent" },
+    { "$ref": "#/$defs/MemberPresenceUpdatedEvent" },
+    { "$ref": "#/$defs/ChatMessageCreatedEvent" },
+    { "$ref": "#/$defs/SessionUpdatedEvent" }
+  ],
+  "$defs": {
+    "RoomStateEvent": {
+      "type": "object",
+      "properties": {
+        "type": { "const": "room.state" },
+        "roomId": { "type": "string", "format": "uuid" },
+        "roomVersion": { "type": "integer", "minimum": 1 },
+        "payload": { "$ref": "#/$defs/RoomPayload" }
+      }
+    },
+    "MembershipUpdatedEvent": {
+      "type": "object",
+      "properties": {
+        "type": { "const": "membership.updated" },
+        "roomId": { "type": "string", "format": "uuid" },
+        "roomVersion": { "type": "integer", "minimum": 1 },
+        "payload": { "$ref": "#/$defs/MembershipUpdatedPayload" }
+      }
+    },
+    "JoinRequestCreatedEvent": {
+      "type": "object",
+      "properties": {
+        "type": { "const": "join-request.created" },
+        "roomId": { "type": "string", "format": "uuid" },
+        "roomVersion": { "type": "null" },
+        "payload": { "$ref": "#/$defs/JoinRequestPayload" }
+      }
+    },
+    "JoinRequestUpdatedEvent": {
+      "type": "object",
+      "properties": {
+        "type": { "const": "join-request.updated" },
+        "roomId": { "type": "string", "format": "uuid" },
+        "roomVersion": { "type": "null" },
+        "payload": { "$ref": "#/$defs/JoinRequestPayload" }
+      }
+    },
+    "MemberPresenceUpdatedEvent": {
+      "type": "object",
+      "properties": {
+        "type": { "const": "member.presence.updated" },
+        "roomId": { "type": "string", "format": "uuid" },
+        "roomVersion": { "type": "integer", "minimum": 1 },
+        "payload": { "$ref": "#/$defs/MemberPayload" }
+      }
+    },
+    "ChatMessageCreatedEvent": {
+      "type": "object",
+      "properties": {
+        "type": { "const": "chat.message.created" },
+        "roomId": { "type": "string", "format": "uuid" },
+        "roomVersion": { "type": "null" },
+        "payload": { "$ref": "#/$defs/ChatMessagePayload" }
+      }
+    },
+    "SessionUpdatedEvent": {
+      "type": "object",
+      "properties": {
+        "type": { "const": "session.updated" },
+        "roomId": { "type": "string", "format": "uuid" },
+        "roomVersion": { "type": "null" },
+        "payload": { "$ref": "#/$defs/StudySessionPayload" }
+      }
+    },
+    "PresenceStatus": {
+      "type": "string",
+      "enum": ["online", "focusing", "idle", "away", "offline"]
+    },
+    "RoomRole": {
+      "type": "string",
+      "enum": ["owner", "member"]
+    },
+    "JoinRequestStatus": {
+      "type": "string",
+      "enum": ["pending", "approved", "rejected", "cancelled"]
+    },
+    "SessionStatus": {
+      "type": "string",
+      "enum": ["running", "paused", "finished"]
+    },
+    "MemberPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "displayName", "avatarUrl", "role", "status"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "displayName": { "type": "string", "minLength": 1 },
+        "avatarUrl": { "type": "string" },
+        "role": { "$ref": "#/$defs/RoomRole" },
+        "status": { "$ref": "#/$defs/PresenceStatus" }
+      }
+    },
+    "RoomPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "appId", "title", "version", "members"],
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "appId": { "type": "string", "pattern": "^[A-Za-z0-9._-]{1,64}$" },
+        "title": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "version": { "type": "integer", "minimum": 1 },
+        "members": { "type": "array", "items": { "$ref": "#/$defs/MemberPayload" } }
+      }
+    },
+    "MembershipUpdatedPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["roomId", "active"],
+      "properties": {
+        "roomId": { "type": "string", "format": "uuid" },
+        "active": { "type": "boolean" }
+      }
+    },
+    "JoinRequestPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "roomId", "userId", "displayName", "status", "createdAt", "updatedAt"],
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "roomId": { "type": "string", "format": "uuid" },
+        "userId": { "type": "string", "minLength": 1 },
+        "displayName": { "type": "string", "minLength": 1 },
+        "status": { "$ref": "#/$defs/JoinRequestStatus" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "ChatMessagePayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "roomId", "senderId", "senderName", "text", "sentAt"],
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "roomId": { "type": "string", "format": "uuid" },
+        "senderId": { "type": "string", "minLength": 1 },
+        "senderName": { "type": "string", "minLength": 1 },
+        "text": { "type": "string", "minLength": 1, "maxLength": 2000 },
+        "sentAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "StudySessionPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "roomId", "userId", "status", "startedAt", "finishedAt", "updatedAt"],
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "roomId": { "type": "string", "format": "uuid" },
+        "userId": { "type": "string", "minLength": 1 },
+        "status": { "$ref": "#/$defs/SessionStatus" },
+        "startedAt": { "type": "string", "format": "date-time" },
+        "finishedAt": { "type": ["string", "null"], "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      }
+    }
+  }
+}

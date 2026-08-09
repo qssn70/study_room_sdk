@@ -1,8 +1,6 @@
-import { Module } from '@nestjs/common';
-import { RoomsService } from './rooms.service';
+import { Global, Module } from '@nestjs/common';
+import { RoomsModule } from './rooms.module';
 
-@Module({
-  providers: [RoomsService],
-  exports: [RoomsService],
-})
+@Global()
+@Module({ imports: [RoomsModule], exports: [RoomsModule] })
 export class RoomsStateModule {}

@@ -1,0 +1,153 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum RoomRole {
+  OWNER
+  MEMBER
+}
+
+enum JoinRequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  CANCELLED
+}
+
+enum SessionStatus {
+  RUNNING
+  PAUSED
+  FINISHED
+}
+
+model Application {
+  appId                String   @id @map("app_id") @db.VarChar(64)
+  issuer               String
+  audience             String
+  jwksUri              String   @map("jwks_uri")
+  enabled              Boolean  @default(true)
+  chatRetentionDays    Int?     @map("chat_retention_days")
+  sessionRetentionDays Int?     @map("session_retention_days")
+  createdAt            DateTime @default(now()) @map("created_at")
+  updatedAt            DateTime @updatedAt @map("updated_at")
+  users                TenantUser[]
+  rooms                Room[]
+  auditLogs            AuditLog[]
+
+  @@map("applications")
+}
+
+model TenantUser {
+  appId       String   @map("app_id") @db.VarChar(64)
+  userId      String   @map("user_id")
+  displayName String   @map("display_name")
+  avatarUrl   String   @default("") @map("avatar_url")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+  application Application @relation(fields: [appId], references: [appId], onDelete: Cascade)
+  memberships RoomMembership[]
+  joinRequests JoinRequest[]
+  sessions    StudySession[]
+  messages    ChatMessage[]
+
+  @@id([appId, userId])
+  @@map("tenant_users")
+}
+
+model Room {
+  id          String   @id @default(uuid()) @db.Uuid
+  appId       String   @map("app_id") @db.VarChar(64)
+  title       String   @db.VarChar(100)
+  version     Int      @default(1)
+  deletedAt   DateTime? @map("deleted_at")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+  application Application @relation(fields: [appId], references: [appId], onDelete: Cascade)
+  memberships RoomMembership[]
+  joinRequests JoinRequest[]
+  sessions    StudySession[]
+  messages    ChatMessage[]
+
+  @@index([appId, deletedAt])
+  @@map("rooms")
+}
+
+model RoomMembership {
+  roomId   String   @map("room_id") @db.Uuid
+  appId    String   @map("app_id") @db.VarChar(64)
+  userId   String   @map("user_id")
+  role     RoomRole
+  joinedAt DateTime @default(now()) @map("joined_at")
+  room     Room @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  user     TenantUser @relation(fields: [appId, userId], references: [appId, userId], onDelete: Cascade)
+
+  @@id([roomId, userId])
+  @@index([appId, userId])
+  @@map("room_memberships")
+}
+
+model JoinRequest {
+  id        String   @id @default(uuid()) @db.Uuid
+  roomId    String   @map("room_id") @db.Uuid
+  appId     String   @map("app_id") @db.VarChar(64)
+  userId    String   @map("user_id")
+  status    JoinRequestStatus @default(PENDING)
+  decidedBy String?  @map("decided_by")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+  room      Room @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  user      TenantUser @relation(fields: [appId, userId], references: [appId, userId], onDelete: Cascade)
+
+  @@index([appId, userId, status])
+  @@index([roomId, status])
+  @@map("join_requests")
+}
+
+model StudySession {
+  id         String   @id @default(uuid()) @db.Uuid
+  roomId     String   @map("room_id") @db.Uuid
+  appId      String   @map("app_id") @db.VarChar(64)
+  userId     String   @map("user_id")
+  status     SessionStatus @default(RUNNING)
+  startedAt  DateTime @default(now()) @map("started_at")
+  finishedAt DateTime? @map("finished_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+  room       Room @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  user       TenantUser @relation(fields: [appId, userId], references: [appId, userId], onDelete: Cascade)
+
+  @@index([appId, userId, status])
+  @@map("study_sessions")
+}
+
+model ChatMessage {
+  id        String   @id @default(uuid()) @db.Uuid
+  roomId    String   @map("room_id") @db.Uuid
+  appId     String   @map("app_id") @db.VarChar(64)
+  senderId  String   @map("sender_id")
+  text      String   @db.VarChar(2000)
+  sentAt    DateTime @default(now()) @map("sent_at")
+  room      Room @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  sender    TenantUser @relation(fields: [appId, senderId], references: [appId, userId], onDelete: Cascade)
+
+  @@index([roomId, sentAt, id])
+  @@map("chat_messages")
+}
+
+model AuditLog {
+  id         String   @id @default(uuid()) @db.Uuid
+  appId      String?  @map("app_id") @db.VarChar(64)
+  actorId    String   @map("actor_id")
+  action     String
+  resourceId String?  @map("resource_id")
+  metadata   Json?
+  createdAt  DateTime @default(now()) @map("created_at")
+  application Application? @relation(fields: [appId], references: [appId], onDelete: SetNull)
+
+  @@index([appId, createdAt])
+  @@map("audit_logs")
+}

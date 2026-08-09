@@ -1,0 +1,14 @@
+extends:
+  - minimal
+rules:
+  no-unused-components: error
+  operation-operationId: error
+  operation-operationId-unique: error
+  operation-tag-defined: error
+  security-defined: error
+  spec-strict-refs: error
+  no-required-schema-properties-undefined: error
+  no-schema-type-mismatch: error
+  no-server-example.com: off
+  tag-description: off
+  operation-summary: off

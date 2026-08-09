@@ -1,44 +1,36 @@
-export type PresenceStatus = 'online' | 'focusing' | 'idle' | 'away' | 'offline';
-export type StudySessionStatus = 'idle' | 'running' | 'paused' | 'finished';
+import type {
+  ChatMessageWire,
+  JoinRequestStatusWire,
+  JoinRequestWire,
+  MemberWire,
+  PresenceStatusWire,
+  RoomRoleWire,
+  RoomWire,
+  SessionStatusWire,
+  StudySessionWire,
+} from './generated/contract-types';
+
+export type PresenceStatus = PresenceStatusWire;
+export type RoomRole = RoomRoleWire;
+export type JoinRequestStatus = JoinRequestStatusWire;
+export type StudySessionStatus = SessionStatusWire;
 
 export interface ExternalIdentity {
   userId: string;
   appId: string;
   displayName: string;
   avatarUrl: string;
+  expiresAt: Date;
 }
 
-export interface StudyMemberDto {
-  id: string;
-  displayName: string;
-  avatarUrl: string;
-  status: PresenceStatus;
+export interface AdminIdentity {
+  subject: string;
+  scopes: string[];
+  expiresAt: Date;
 }
 
-export interface StudyRoomDto {
-  id: string;
-  appId: string;
-  title: string;
-  members: StudyMemberDto[];
-}
-
-export interface StudySessionDto {
-  id: string;
-  appId: string;
-  roomId: string;
-  userId: string;
-  status: StudySessionStatus;
-  startedAt: string;
-  finishedAt?: string;
-}
-
-export interface ChatMessageDto {
-  id: string;
-  appId: string;
-  roomId: string;
-  senderId: string;
-  senderName: string;
-  text: string;
-  sentAt: string;
-}
-
+export type StudyMemberDto = MemberWire;
+export type StudyRoomDto = RoomWire;
+export type JoinRequestDto = JoinRequestWire;
+export type StudySessionDto = StudySessionWire;
+export type ChatMessageDto = ChatMessageWire;

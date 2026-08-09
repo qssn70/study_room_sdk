@@ -1,6 +1,8 @@
-import { ExternalIdentity } from '../domain';
+import { Request } from 'express';
+import { AdminIdentity, ExternalIdentity } from '../domain';
 
-export interface AuthenticatedRequest {
-  headers: Record<string, string | string[] | undefined>;
+export interface AuthenticatedRequest extends Request {
   identity?: ExternalIdentity;
+  adminIdentity?: AdminIdentity;
+  requestId?: string;
 }
