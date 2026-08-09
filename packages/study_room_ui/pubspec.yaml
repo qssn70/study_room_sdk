@@ -1,18 +1,29 @@
 name: study_room_ui
 description: Optional Flutter widgets for the online study room SDK.
-version: 0.3.0
-publish_to: none
+version: 0.4.0-beta.1
+homepage: https://github.com/qssn70/study_room_sdk
+repository: https://github.com/qssn70/study_room_sdk
+issue_tracker: https://github.com/qssn70/study_room_sdk/issues
+topics:
+  - flutter
+  - widgets
+  - study
+  - collaboration
 
 environment:
   sdk: ^3.8.0
 
+resolution: workspace
+
 dependencies:
+  cupertino_icons: ^1.0.8
   flutter:
+    sdk: flutter
+  flutter_localizations:
     sdk: flutter
   just_audio: ^0.10.5
   shared_preferences: ^2.3.3
-  study_room_sdk:
-    path: ../study_room_sdk
+  study_room_sdk: ^0.4.0-beta.1
 
 dev_dependencies:
   flutter_test:

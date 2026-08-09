@@ -24,15 +24,12 @@ void main() {
     );
   });
 
-  test('StudyFocusKitView defaults to the documented image background', () {
+  test('StudyFocusKitView defaults to an offline gradient background', () {
     const view = StudyFocusKitView();
 
-    expect(view.background.type, StudyBackgroundType.image);
-    expect(view.background.image, isA<NetworkImage>());
-    expect(
-      (view.background.image! as NetworkImage).url,
-      'https://images.unsplash.com/photo-1419242902214-272b3f66ee7a?q=80&w=2000&auto=format&fit=crop',
-    );
+    expect(view.background.type, StudyBackgroundType.gradient);
+    expect(view.background.image, isNull);
+    expect(view.background.gradientColors, hasLength(3));
 
     const customBackground = StudyBackground.color(Colors.teal);
     const customView = StudyFocusKitView(background: customBackground);
@@ -92,9 +89,11 @@ void main() {
             store: MemoryStudyStore(),
             visualStyle: style,
             background: _testBackground,
-            room: const StudyRoom(
+            room: StudyRoom(
               id: 'room',
+              appId: 'app-1',
               title: 'Focus room',
+              version: 1,
               members: [
                 StudyMember(
                   id: 'u1',
@@ -158,9 +157,11 @@ void main() {
           currentUserId: 'u1',
           date: DateTime(2026, 6, 19),
           background: _testBackground,
-          room: const StudyRoom(
+          room: StudyRoom(
             id: 'room',
+            appId: 'app-1',
             title: 'Focus room',
+            version: 1,
             members: [
               StudyMember(
                 id: 'u1',
@@ -755,9 +756,11 @@ void main() {
           store: MemoryStudyStore(),
           currentUserId: 'u1',
           background: _testBackground,
-          room: const StudyRoom(
+          room: StudyRoom(
             id: 'room',
+            appId: 'app-1',
             title: 'Focus room',
+            version: 1,
             members: [
               StudyMember(
                 id: 'u1',

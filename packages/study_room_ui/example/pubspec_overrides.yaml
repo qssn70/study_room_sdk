@@ -1,0 +1,5 @@
+dependency_overrides:
+  study_room_sdk:
+    path: ../../study_room_sdk
+  study_room_ui:
+    path: ..
