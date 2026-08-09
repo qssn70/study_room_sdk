@@ -1,58 +1,32 @@
-# API Contract
+# HTTP API contract
 
-All endpoints require `Authorization: Bearer <jwt>`. Tokens must use HS256,
-contain a future `exp`, and include non-empty `sub`, `appId`, and `displayName`
-claims. The server derives tenant and user identity exclusively from the JWT.
+[`contracts/openapi.yaml`](../contracts/openapi.yaml) is the authoritative OpenAPI 3.1 contract. `npm run generate:contracts` produces low-level TypeScript and Dart wire types; `npm run check:contracts` fails when generated files drift.
 
-## Rooms
+All successful application endpoints are under `/v1`:
 
-- `GET /rooms/:roomId`: returns the current room state for a room member.
-- `POST /rooms/:roomId/join`: adds or refreshes the caller's access membership.
-- `POST /rooms/:roomId/leave`: removes the caller's access membership.
+- `POST/GET /v1/rooms`, `GET/DELETE /v1/rooms/{roomId}`
+- `POST/GET/DELETE /v1/rooms/{roomId}/join-requests`
+- `PATCH /v1/rooms/{roomId}/join-requests/{requestId}`
+- `GET /v1/join-requests`
+- `DELETE /v1/rooms/{roomId}/members/me`
+- `DELETE /v1/rooms/{roomId}/members/{userId}`
+- `PUT /v1/rooms/{roomId}/owner`
+- `POST /v1/rooms/{roomId}/sessions`, `GET /v1/rooms/{roomId}/active-sessions`, `PATCH /v1/sessions/{sessionId}`
+- `GET/POST /v1/rooms/{roomId}/messages`
 
-Joining is the only room operation available before membership is established.
-Chat, room reads, session starts, and realtime subscriptions require membership.
+Management uses `POST/GET /admin/v1/apps` and `GET/PATCH /admin/v1/apps/{appId}`. Application IDs are immutable and applications are disabled rather than deleted.
 
-Room response:
+Room titles contain 1–100 characters after trimming. Messages contain 1–2000 characters. Cursor pages default to 50 and cap at 100. A room has exactly one owner; an owner must transfer ownership or delete the room before leaving.
+
+Every error has this shape and returns its request ID in both JSON and `x-request-id`:
 
 ```json
 {
-  "id": "room-1",
-  "appId": "app-1",
-  "title": "Room room-1",
-  "members": [
-    {
-      "id": "user-1",
-      "displayName": "Lin",
-      "avatarUrl": "",
-      "status": "offline"
-    }
-  ]
+  "code": "membership_required",
+  "message": "Room membership is required",
+  "details": null,
+  "requestId": "6e997d45-2d84-4cb8-a724-f03b70c9b193"
 }
 ```
 
-Presence is connection-derived. A member with no realtime connections is
-`offline`; joining the Socket.IO room changes the effective status to
-`online`. Disconnecting does not remove access membership.
-
-## Sessions
-
-- `POST /rooms/:roomId/sessions/start`
-- `POST /sessions/:sessionId/pause`
-- `POST /sessions/:sessionId/resume`
-- `POST /sessions/:sessionId/finish`
-
-Session statuses are `idle`, `running`, `paused`, and `finished`.
-Only the session creator can pause, resume, or finish a session.
-Starting/resuming a session changes the connected creator to `focusing`;
-pausing/finishing changes them to `idle`. A creator can still finish after
-leaving the room.
-
-## Chat
-
-- `GET /rooms/:roomId/chat`: returns `{ "messages": [...] }`.
-- `POST /rooms/:roomId/chat` with `{ "text": "hello" }`: sends a trimmed message.
-
-Both operations require room access membership. `ChatClient.loadHistory()`
-returns messages in server order.
-
+`details` is omitted when there is no safe structured detail.

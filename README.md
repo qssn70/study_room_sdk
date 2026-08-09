@@ -1,86 +1,80 @@
-# Study Room SDK
+# Study Room SDK 0.4
 
-Flutter SDK, optional Flutter widgets, and a NestJS reference backend for adding online study rooms to another app.
+Production-oriented online study rooms for Flutter: a stable Dart SDK, reusable Flutter UI, and a NestJS reference backend backed by PostgreSQL and Redis.
 
-## Packages
+The current release line is `0.4.0-beta.1`. It is a breaking replacement for the in-memory 0.3 protocol: REST lives under `/v1`, and the Socket.IO namespace is `/v1/realtime`.
 
-- `packages/study_room_sdk`: core Flutter SDK for auth, REST, realtime streams, room state, study sessions, and chat.
-- `packages/study_room_ui`: optional Flutter widgets built on the SDK domain models.
-- `apps/example_flutter`: minimal integration example.
-- `server`: NestJS reference backend with REST and Socket.IO realtime endpoints.
+## Workspace
 
-## Minimal Study Focus Kit
+- `packages/study_room_sdk`: HTTP/realtime client, immutable models, structured errors, lifecycle management, and the compatible local focus data layer.
+- `packages/study_room_ui`: room lobby, application status, owner approval inbox, member/ownership controls, and the local focus experience.
+- `apps/example_flutter`: reference owner/member application for all six Flutter platforms.
+- `server`: NestJS API with Prisma/PostgreSQL, Redis presence and multi-instance Socket.IO, per-application JWKS, operations endpoints, and retention jobs.
+- `contracts`: authoritative OpenAPI 3.1 and realtime JSON Schema contracts.
 
-The Flutter packages also include a local-first focus kit that can be embedded without changing the backend:
+## Local stack
 
-- Pomodoro timer with 25/5, 50/10, and custom configs.
-- Today goal, study records, personal analytics, and day/week/month reports.
-- Background sound library with Rain, White noise, Cafe, Library, and Keyboard built-in loops plus custom sources.
-- Color, image, and gradient backgrounds with a readability mask.
-- Optional silent companion list based on existing `StudyRoom.members` and `PresenceStatus`.
-- A four-page desktop workspace for focus, analytics, 30-day history/tasks, and settings.
-- User-scoped persistence for tasks, sound/volume, background/mask, and desktop navigation.
-
-Use `StudyFocusKitView` for the complete experience, or compose `PomodoroTimerView`, `TodayGoalView`, `StudyStatsView`, `StudyAnalyticsView`, `StudyReportView`, `BackgroundSoundView`, `StudyBackgroundLayer`, and `SilentCompanionList`.
-
-`StudyFocusKitView` includes the three visual styles documented in
-[`docs/ui-design`](docs/ui-design/) and defaults to the recommended immersive
-dock layout:
-
-```dart
-StudyFocusKitView(
-  visualStyle: StudyFocusVisualStyle.immersiveDock,
-  currentUserId: currentUser.id,
-  localStorageNamespace: 'my-app',
-)
-```
-
-The default background is exposed as `studyFocusDefaultBackground`, backed by
-`studyFocusDefaultBackgroundImageUrl`:
-
-```text
-https://images.unsplash.com/photo-1419242902214-272b3f66ee7a?q=80&w=2000&auto=format&fit=crop
-```
-
-Apps can still override it with any supported `StudyBackground`:
-
-```dart
-StudyFocusKitView(
-  background: StudyBackground.image(image: myImageProvider),
-)
-```
-
-Downstream apps can switch freely between:
-
-- `StudyFocusVisualStyle.split`: portrait top/bottom split layout.
-- `StudyFocusVisualStyle.centered`: portrait core-centered layout.
-- `StudyFocusVisualStyle.immersiveDock`: recommended immersive bottom-docked layout.
-
-## Quick Start
+Docker Compose starts PostgreSQL, Redis, two API instances, nginx, and an explicitly development-only ephemeral JWKS service. PostgreSQL and Redis are not published to the host.
 
 ```sh
+cp .env.example .env
+# Replace POSTGRES_PASSWORD in .env.
 docker compose up --build
-cd server && npm ci
-cd ..
-cd packages/study_room_sdk && dart test
-cd ../study_room_ui && flutter test
-cd ../../apps/example_flutter && flutter test
-cd ../../server && npm test
 ```
 
-The reference API listens on `http://localhost:3000`. OpenAPI docs are served from `/docs/openapi`.
+Create a short-lived demo token:
 
-Version 0.3 requires expiring HS256 JWTs for both REST and Socket.IO. It adds
-multi-room realtime subscriptions, room-aware member events, chat history,
-and `online`/`focusing`/`idle`/`away`/`offline` presence aggregation. Local
-focus data is isolated by `localStorageNamespace` and `currentUserId`; an
-empty user id uses a separate guest scope.
+```sh
+curl -X POST http://localhost:4000/token \
+  -H "content-type: application/json" \
+  -d '{"sub":"owner-1","displayName":"Owner"}'
+```
 
-## License Layout
+The API is served at `http://localhost:3000`, health endpoints at `/health/live` and `/health/ready`, and the OpenAPI viewer at `/docs/openapi`.
 
-- Flutter SDK and UI packages are intended for Apache-2.0 distribution.
-- The reference backend in `server/` follows the repository GPL-3.0 license.
-- Commercial/private backend licensing can be handled separately.
+## Flutter
 
-See the [documentation index](docs/README.md) for integration details, API
-contracts, deployment guidance, realtime events, and UI design notes.
+```dart
+final sdk = StudyRoomSdk(
+  StudyRoomSdkConfig(
+    apiBaseUri: Uri.parse('https://study.example.com'),
+    realtimeUri: Uri.parse('wss://study.example.com/v1/realtime'),
+    tokenProvider: refreshStudyRoomAccessToken,
+  ),
+);
+
+await sdk.start();
+final room = await sdk.rooms.create('Exam preparation');
+await sdk.rooms.subscribe(room.id);
+await sdk.chat.send(room.id, 'Hello');
+await sdk.close();
+```
+
+Configure UI localization on the host `MaterialApp`:
+
+```dart
+MaterialApp(
+  localizationsDelegates: StudyRoomLocalizations.localizationsDelegates,
+  supportedLocales: StudyRoomLocalizations.supportedLocales,
+  home: StudyRoomLobbyView(sdk: sdk, currentUserId: userId),
+)
+```
+
+The focus UI defaults to a bundled offline gradient and performs no background network request.
+
+## Verification
+
+```sh
+npm ci
+npm run check:contracts
+npm run build
+npm test
+dart analyze
+dart test packages/study_room_sdk
+flutter test packages/study_room_ui
+flutter analyze apps/example_flutter
+```
+
+See [getting started](docs/getting-started.md), [deployment](docs/deployment.md), [realtime events](docs/realtime-events.md), and the [0.3 migration guide](docs/migration-0.3-to-0.4.md).
+
+The Flutter packages use Apache-2.0. The reference server and repository-level code use GPL-3.0-only. This project does not publish packages as part of its CI.

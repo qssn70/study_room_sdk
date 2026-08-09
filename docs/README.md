@@ -6,6 +6,8 @@
 - [API contract](api-contract.md): REST endpoints and request/response formats.
 - [Realtime events](realtime-events.md): Socket.IO connection and event reference.
 - [Deployment](deployment.md): environment, persistence, and production checklist.
+- [0.3 → 0.4 migration](migration-0.3-to-0.4.md): breaking server, token, and Flutter API changes.
+- [0.4 release train](release-0.4.md): alpha, beta, RC, and final promotion gates.
 - [Minimal study SDK plan](minimal-study-sdk-plan.md): feature scope, public APIs, implementation notes, and verification.
 
 ## UI design

@@ -1,75 +1,31 @@
-# Realtime Events
+# Realtime protocol
 
-The reference server exposes a Socket.IO namespace at `/realtime`.
+Connect to the Socket.IO namespace `/v1/realtime` with a user JWT in `auth.token`. Query-string tokens are rejected. The server automatically joins private user and application channels; clients cannot choose arbitrary channel names.
 
-Connect with the same JWT used for REST using the Socket.IO auth payload:
+Room access is an acknowledged operation:
 
-```javascript
-io('http://localhost:3000/realtime', {
-  auth: { token: jwt },
-});
+```json
+{ "event": "room.subscribe", "data": { "roomId": "7e0ae45f-b8ea-4e39-a51f-c77139b78019" } }
 ```
 
-Query-string tokens are rejected.
+The ack is either `{ "ok": true }` or `{ "ok": false, "error": { "code": "...", "message": "..." } }`. `room.unsubscribe` and `presence.set-away` use the same ack convention. Clients send `{ "roomId": "...", "away": true|false }`; online/offline and focusing/idle are derived by the server from connections and active sessions.
 
-Join a room topic:
+Server events are emitted as `study-room.event` and validated by [`contracts/realtime-events.schema.json`](../contracts/realtime-events.schema.json):
 
 ```json
 {
-  "event": "room.join",
-  "data": {
-    "roomId": "room-1"
-  }
+  "schemaVersion": 1,
+  "eventId": "b8dccbd6-8f84-46ac-bb62-77be33a2614f",
+  "type": "chat.message.created",
+  "roomId": "7e0ae45f-b8ea-4e39-a51f-c77139b78019",
+  "roomVersion": null,
+  "occurredAt": "2026-08-09T12:00:00.000Z",
+  "payload": {}
 }
 ```
 
-The server obtains `appId` from the verified JWT and checks room membership.
-Use `room.leave` with the same `{ "roomId": "room-1" }` payload to leave the
-Socket.IO channel.
+`roomId` and `roomVersion` are always present in the envelope, but either can be `null` when the event has no corresponding room or room snapshot version. Room structure, membership, and Presence events carry the current room version. Chat, session, and pending join-request events use `roomVersion: null`; clients must not use those events to order or replace room snapshots.
 
-Update this socket's presence after subscribing:
+Events are best effort and are not a history log. After connecting or reconnecting, the Flutter SDK re-authenticates, resubscribes with ack, and fetches each joined room from REST. REST/ PostgreSQL state wins over an event. Event IDs can be used for short-lived client deduplication.
 
-```json
-{
-  "event": "presence.update",
-  "data": {
-    "roomId": "room-1",
-    "status": "focusing"
-  }
-}
-```
-
-Clients may send `online`, `focusing`, `idle`, or `away`; `offline` is owned by
-the server. The socket must still be subscribed and the identity must still be
-an access member. Multiple sockets are aggregated as follows: no connections
-is `offline`, all-away is `away`, then `focusing` takes priority, followed by
-`idle` and `online`.
-
-Events are emitted as `study-room.event`:
-
-- `room.state`: full room state.
-- `member.updated`: member presence changed.
-- `chat.message`: new chat message.
-- `session.updated`: study session changed.
-
-Every event has a room-aware envelope:
-
-```json
-{
-  "type": "member.updated",
-  "roomId": "room-1",
-  "payload": {
-    "id": "user-1",
-    "displayName": "Lin",
-    "avatarUrl": "",
-    "status": "focusing"
-  }
-}
-```
-
-The Flutter SDK exposes all-room streams plus `roomStateFor(roomId)`,
-`roomSnapshot(roomId)`, `roomMemberEventsStream`, and
-`memberEventsFor(roomId)`. The old flat `memberEventsStream` remains available
-but is deprecated. On reconnect, the SDK re-subscribes every joined room and
-re-sends each room's latest desired Presence.
-
+Presence is stored per socket in Redis with a 60-second TTL and refreshed every 20 seconds. Membership removal invokes a cross-instance `socketsLeave`; application disabling and JWT expiry disconnect matching sockets across instances.
