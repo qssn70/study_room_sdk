@@ -189,7 +189,12 @@ class _StudyRoomLobbyViewState extends State<StudyRoomLobbyView> {
           if (_rooms.isEmpty)
             Padding(
               padding: const EdgeInsets.symmetric(vertical: 32),
-              child: Center(child: Text(copy.noRooms)),
+              child: Center(
+                child: Text(
+                  copy.noRooms,
+                  style: Theme.of(context).textTheme.bodyMedium,
+                ),
+              ),
             )
           else
             ..._rooms.map(
@@ -210,7 +215,10 @@ class _StudyRoomLobbyViewState extends State<StudyRoomLobbyView> {
           Text(copy.myRequests, style: Theme.of(context).textTheme.titleLarge),
           const SizedBox(height: 8),
           if (_requests.isEmpty)
-            Text(copy.noRequests)
+            Text(
+              copy.noRequests,
+              style: Theme.of(context).textTheme.bodyMedium,
+            )
           else
             ..._requests.map(
               (request) => ListTile(

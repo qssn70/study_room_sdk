@@ -63,6 +63,29 @@ void main() {
     expect(_scenarios.map((scenario) => scenario.name).toSet(), hasLength(8));
   });
 
+  testWidgets('room management fixture renders loaded content without errors', (
+    tester,
+  ) async {
+    final scenario = _scenarios.singleWhere(
+      (candidate) => candidate.roomManagement,
+    );
+
+    await _pumpScenario(tester, scenario);
+
+    expect(tester.takeException(), isNull);
+    expect(find.byType(ErrorWidget), findsNothing);
+    expect(find.text('Focus Room'), findsOneWidget);
+    expect(find.text('No requests'), findsOneWidget);
+    expect(
+      tester.widget<Text>(find.text('No requests')).style,
+      isNotNull,
+    );
+    expect(
+      tester.binding.renderViews.single.toStringDeep(),
+      isNot(contains('OVERFLOWING')),
+    );
+  });
+
   for (final scenario in _scenarios) {
     testWidgets('Ubuntu golden: ${scenario.name}', (tester) async {
       expect(
@@ -190,7 +213,7 @@ StudyRoomSdk _goldenSdk() => StudyRoomSdk(
     realtimeUri: Uri.parse('wss://example.com/v1/realtime'),
     tokenProvider: (_) async => StudyRoomAccessToken(
       value: 'golden-token',
-      expiresAt: _fixedDate.add(const Duration(hours: 1)),
+      expiresAt: DateTime.utc(2100),
     ),
     transport: _GoldenTransport(),
     realtimeConnector: _UnusedRealtimeConnector(),
