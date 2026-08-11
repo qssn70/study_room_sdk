@@ -3,12 +3,12 @@
 ## Start the reference backend
 
 ```sh
-cp .env.example .env
-# Set a local POSTGRES_PASSWORD, then:
-docker compose up --build
+cp .env.dev.example .env.dev
+# Replace POSTGRES_PASSWORD and E2E_FIXTURE_CONTROL_TOKEN, then:
+docker compose --env-file .env.dev --profile dev up --build
 ```
 
-Compose runs two API instances behind `http://localhost:3000`, plus internal PostgreSQL and Redis services. The development JWKS fixture is available at `http://localhost:4000`.
+The explicit `dev` profile runs two API instances behind `http://localhost:3000`, internal PostgreSQL and Redis services, the demo seed, and the development JWKS fixture at `http://localhost:4000`. Running Compose without `--profile dev` does not start the fixture or seed and requires an external HTTPS administrator JWKS configuration.
 
 ```sh
 curl -X POST http://localhost:4000/token \

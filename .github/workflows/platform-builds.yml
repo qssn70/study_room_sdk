@@ -1,46 +1,169 @@
 name: Flutter platform builds
 
 on:
+  push:
+    branches: [main]
   pull_request:
   workflow_dispatch:
 
 permissions:
   contents: read
 
+concurrency:
+  group: flutter-platform-builds-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
+    name: Release build (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
         include:
           - os: ubuntu-latest
             target: web
-            command: flutter build web
+            command: flutter build web --release
+            artifact_path: apps/example_flutter/build/web
           - os: ubuntu-latest
             target: android
-            command: flutter build apk --debug
+            command: flutter build apk --release
+            artifact_path: apps/example_flutter/build/app/outputs/flutter-apk/app-release.apk
           - os: ubuntu-latest
             target: linux
-            command: flutter build linux --debug
+            command: flutter build linux --release
+            artifact_path: apps/example_flutter/build/linux/x64/release/bundle
           - os: windows-latest
             target: windows
-            command: flutter build windows --debug
+            command: flutter build windows --release
+            artifact_path: apps/example_flutter/build/windows/x64/runner/Release
           - os: macos-latest
             target: macos
-            command: flutter build macos --debug
+            command: flutter build macos --release
+            artifact_path: apps/example_flutter/build/macos/Build/Products/Release/study_room_example.app
           - os: macos-latest
             target: ios
-            command: flutter build ios --debug --no-codesign
-    runs-on: ${{ matrix.os }}
+            command: flutter build ios --release --no-codesign
+            artifact_path: apps/example_flutter/build/ios/iphoneos/Runner.app
     steps:
       - uses: actions/checkout@v4
+      - if: matrix.target == 'android'
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
       - uses: subosito/flutter-action@v2
         with:
-          channel: stable
+          flutter-version: '3.44.1'
           cache: true
-      - if: matrix.target == 'linux'
-        run: sudo apt-get update && sudo apt-get install -y ninja-build libgtk-3-dev
+      - name: Install Linux desktop build dependencies
+        if: matrix.target == 'linux'
+        run: sudo apt-get update && sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev
       - run: flutter pub get
-      - name: Build ${{ matrix.target }}
+      - name: Record release build start time
+        shell: pwsh
+        run: |
+          $startedAt = [DateTimeOffset]::UtcNow.ToString('o')
+          "BUILD_STARTED_AT=$startedAt" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+      - name: Build ${{ matrix.target }} release artifact
         working-directory: apps/example_flutter
         run: ${{ matrix.command }}
+      - name: Package ${{ matrix.target }} release artifact
+        shell: pwsh
+        run: |
+          $workspace = [IO.Path]::GetFullPath($env:GITHUB_WORKSPACE)
+          $sourcePath = [IO.Path]::GetFullPath((Join-Path $workspace '${{ matrix.artifact_path }}'))
+          if (-not (Test-Path -LiteralPath $sourcePath)) {
+            throw "Release artifact was not found: $sourcePath"
+          }
+
+          $releaseDirectory = Join-Path $workspace 'artifacts/releases'
+          New-Item -ItemType Directory -Path $releaseDirectory -Force | Out-Null
+          $baseName = "study-room-${{ matrix.target }}-${{ github.sha }}"
+          switch ('${{ matrix.target }}') {
+            'android' {
+              $packagedPath = Join-Path $releaseDirectory "$baseName.apk"
+              Copy-Item -LiteralPath $sourcePath -Destination $packagedPath
+            }
+            'linux' {
+              $packagedPath = Join-Path $releaseDirectory "$baseName.tar.gz"
+              & tar -czf $packagedPath -C (Split-Path $sourcePath -Parent) (Split-Path $sourcePath -Leaf)
+              if ($LASTEXITCODE -ne 0) { throw 'tar failed to package the Linux bundle' }
+            }
+            'macos' {
+              $packagedPath = Join-Path $releaseDirectory "$baseName.zip"
+              & ditto -c -k --sequesterRsrc --keepParent $sourcePath $packagedPath
+              if ($LASTEXITCODE -ne 0) { throw 'ditto failed to package the macOS app' }
+            }
+            'ios' {
+              $packagedPath = Join-Path $releaseDirectory "$baseName.zip"
+              & ditto -c -k --sequesterRsrc --keepParent $sourcePath $packagedPath
+              if ($LASTEXITCODE -ne 0) { throw 'ditto failed to package the iOS app' }
+            }
+            default {
+              $packagedPath = Join-Path $releaseDirectory "$baseName.zip"
+              Compress-Archive -LiteralPath $sourcePath -DestinationPath $packagedPath -CompressionLevel Optimal
+            }
+          }
+          if (-not (Test-Path -LiteralPath $packagedPath -PathType Leaf)) {
+            throw "Packaged release artifact was not created: $packagedPath"
+          }
+          $relativePackagedPath = [IO.Path]::GetRelativePath($workspace, $packagedPath).Replace('\', '/')
+          "PACKAGED_ARTIFACT_PATH=$relativePackagedPath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+      - name: Generate release evidence manifest
+        shell: pwsh
+        run: |
+          $workspace = [IO.Path]::GetFullPath($env:GITHUB_WORKSPACE)
+          $relativeArtifactPath = $env:PACKAGED_ARTIFACT_PATH
+          $artifactPath = [IO.Path]::GetFullPath((Join-Path $workspace $relativeArtifactPath))
+          if (Test-Path -LiteralPath $artifactPath -PathType Leaf) {
+            $files = @(Get-Item -LiteralPath $artifactPath)
+          } elseif (Test-Path -LiteralPath $artifactPath -PathType Container) {
+            $files = @(Get-ChildItem -LiteralPath $artifactPath -File -Recurse)
+          } else {
+            throw "Release artifact was not found: $relativeArtifactPath"
+          }
+          if ($files.Count -eq 0) {
+            throw "Release artifact contains no files: $relativeArtifactPath"
+          }
+
+          $entries = @(
+            foreach ($file in ($files | Sort-Object FullName)) {
+              [ordered]@{
+                path = [IO.Path]::GetRelativePath($workspace, $file.FullName).Replace('\', '/')
+                sizeBytes = [int64]$file.Length
+                sha256 = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+              }
+            }
+          )
+          $endedAt = [DateTimeOffset]::UtcNow
+          $startedAt = [DateTimeOffset]::Parse($env:BUILD_STARTED_AT)
+          $manifest = [ordered]@{
+            schemaVersion = 1
+            commitSha = '${{ github.sha }}'
+            platform = '${{ matrix.target }}'
+            runUrl = '${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}'
+            runId = '${{ github.run_id }}'
+            runAttempt = '${{ github.run_attempt }}'
+            startedAtUtc = $startedAt.ToString('o')
+            endedAtUtc = $endedAt.ToString('o')
+            durationSeconds = [math]::Round(($endedAt - $startedAt).TotalSeconds, 3)
+            artifactRoot = $relativeArtifactPath.Replace('\', '/')
+            totalSizeBytes = [int64](($entries | Measure-Object -Property sizeBytes -Sum).Sum)
+            files = $entries
+          }
+          $manifestDirectory = Join-Path $workspace 'artifacts/manifests'
+          New-Item -ItemType Directory -Path $manifestDirectory -Force | Out-Null
+          $manifestPath = Join-Path $manifestDirectory '${{ matrix.target }}.json'
+          $manifest | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $manifestPath -Encoding utf8
+          Get-Content -LiteralPath $manifestPath
+      - name: Upload ${{ matrix.target }} release artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: study-room-${{ matrix.target }}-${{ github.sha }}
+          path: |
+            artifacts/releases/**
+            artifacts/manifests/${{ matrix.target }}.json
+          if-no-files-found: error
+          retention-days: 30

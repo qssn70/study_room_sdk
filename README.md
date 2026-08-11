@@ -14,13 +14,15 @@ The current release line is `0.4.0-beta.1`. It is a breaking replacement for the
 
 ## Local stack
 
-Docker Compose starts PostgreSQL, Redis, two API instances, nginx, and an explicitly development-only ephemeral JWKS service. PostgreSQL and Redis are not published to the host.
+The default Compose profile starts PostgreSQL, Redis, migrations, two API instances, and nginx. It never starts the development JWKS fixture, seed, or E2E runner. PostgreSQL and Redis are not published to the host.
 
 ```sh
-cp .env.example .env
-# Replace POSTGRES_PASSWORD in .env.
-docker compose up --build
+cp .env.dev.example .env.dev
+# Replace POSTGRES_PASSWORD and E2E_FIXTURE_CONTROL_TOKEN in .env.dev.
+docker compose --env-file .env.dev --profile dev up --build
 ```
+
+The explicit `dev` profile adds the ephemeral JWKS fixture and demo application seed. Production-style deployments instead copy `.env.example`, configure an external HTTPS administrator JWKS, and run without a profile.
 
 Create a short-lived demo token:
 

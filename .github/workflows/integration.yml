@@ -1,6 +1,7 @@
 name: Compose integration
 
 on:
+  pull_request:
   push:
     branches: [main]
   workflow_dispatch:
@@ -9,53 +10,310 @@ permissions:
   contents: read
 
 concurrency:
-  group: compose-integration-${{ github.ref }}
+  group: compose-integration-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  integration:
+  rate_limit:
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 25
     env:
-      COMPOSE_PROJECT_NAME: study-room-${{ github.run_id }}-${{ github.run_attempt }}
-      POSTGRES_PASSWORD: ci-only-${{ github.run_id }}-${{ github.run_attempt }}
-      E2E_FIXTURE_CONTROL_TOKEN: fixture-${{ github.run_id }}-${{ github.run_attempt }}
+      COMPOSE_PROJECT_NAME: study-room-rate-${{ github.run_id }}-${{ github.run_attempt }}
+      POSTGRES_PASSWORD: rate-${{ github.run_id }}-${{ github.run_attempt }}
+      NODE_ENV: test
+      STUDY_ROOM_RUNTIME_PROFILE: test
+      STUDY_ROOM_ALLOW_INSECURE_JWKS: "true"
+      STUDY_ROOM_ADMIN_JWKS_URL: http://jwks:4000/admin/jwks.json
+      STUDY_ROOM_ADMIN_JWT_ISSUER: http://jwks:4000/admin
+      STUDY_ROOM_ADMIN_JWT_AUDIENCE: study-room-admin
+      E2E_FIXTURE_CONTROL_TOKEN: rate-fixture-${{ github.run_id }}-${{ github.run_attempt }}
+      E2E_RUN_ID: rate-${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Initialize evidence timing
+        run: |
+          mkdir -p artifacts
+          date +%s > artifacts/job-started-at-epoch
+
+      - name: Start isolated rate-limit stack
+        id: start
+        run: |
+          docker compose --profile test up --build --detach --wait postgres redis jwks
+          docker compose --profile test run --rm migrate
+          docker compose --profile test run --rm --no-deps seed
+          docker compose --profile test up --build --detach --wait proxy
+
+      - name: Verify one shared IP quota across both API instances
+        id: probe
+        run: |
+          docker compose --profile test run --rm --no-deps \
+            -v "$GITHUB_WORKSPACE/artifacts:/artifacts" \
+            -e E2E_RESULT_PATH=/artifacts/rate-limit.json \
+            e2e node tool/e2e-rate-limit.mjs
+          jq -e '.successfulRequests == 120 and .rejectedRequest == 121 and .rejectedStatus == 429' \
+            artifacts/rate-limit.json > /dev/null
+
+      - name: Capture structured result and diagnostics
+        if: always()
+        shell: bash
+        run: |
+          docker compose ps --all --format json > artifacts/compose-ps.json 2>&1 || true
+          docker compose logs --no-color --timestamps > artifacts/compose.log 2>&1 || true
+          image_ids=$(docker compose images -q | sort -u)
+          if [[ -n "$image_ids" ]]; then
+            docker image inspect $image_ids | jq '[.[] | {id:.Id,repoDigests:(.RepoDigests // []),repoTags:(.RepoTags // [])}]' > artifacts/images.json
+          else
+            echo '[]' > artifacts/images.json
+          fi
+          jq -n \
+            --arg scenario rate-limit \
+            --arg start '${{ steps.start.outcome }}' \
+            --arg probe '${{ steps.probe.outcome }}' \
+            '{scenario:$scenario,steps:{start:$start,probe:$probe}}' \
+            > artifacts/result.json
+          EVIDENCE_SCENARIO=rate-limit node server/tool/e2e-evidence-manifest.mjs
+
+      - name: Upload rate-limit evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: compose-rate-limit-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Remove rate-limit containers, networks, and volumes
+        if: always()
+        run: docker compose --profile test down --volumes --remove-orphans --timeout 10
+
+  core:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      COMPOSE_PROJECT_NAME: study-room-core-${{ github.run_id }}-${{ github.run_attempt }}
+      POSTGRES_PASSWORD: core-${{ github.run_id }}-${{ github.run_attempt }}
+      NODE_ENV: test
+      STUDY_ROOM_RUNTIME_PROFILE: test
+      STUDY_ROOM_ALLOW_INSECURE_JWKS: "true"
+      STUDY_ROOM_ADMIN_JWKS_URL: http://jwks:4000/admin/jwks.json
+      STUDY_ROOM_ADMIN_JWT_ISSUER: http://jwks:4000/admin
+      STUDY_ROOM_ADMIN_JWT_AUDIENCE: study-room-admin
+      E2E_FIXTURE_CONTROL_TOKEN: core-fixture-${{ github.run_id }}-${{ github.run_attempt }}
       E2E_ALLOW_SHORT_LIVED_TOKENS: "true"
-      E2E_RUN_ID: gha-${{ github.run_id }}-${{ github.run_attempt }}
+      E2E_RUN_ID: core-${{ github.run_id }}-${{ github.run_attempt }}
       STUDY_ROOM_JWKS_CACHE_MS: 1000
       E2E_JWKS_RETIRE_WAIT_MS: 2500
+    steps:
+      - uses: actions/checkout@v4
+      - name: Initialize evidence timing
+        run: |
+          mkdir -p artifacts
+          date +%s > artifacts/job-started-at-epoch
+
+      - name: Start isolated two-instance stack
+        id: start
+        run: |
+          docker compose --profile test up --build --detach --wait postgres redis jwks
+          docker compose --profile test run --rm migrate
+          docker compose --profile test run --rm --no-deps seed
+          docker compose --profile test up --build --detach --wait proxy
+
+      - name: Verify migration replay is idempotent
+        id: migration
+        run: docker compose --profile test run --rm migrate
+
+      - name: Cross-instance core flow and duplicate-event idempotency
+        id: business
+        run: docker compose --profile test run --rm --no-deps e2e
+
+      - name: Authentication, tenant isolation, rotation, expiry, and application disable
+        id: security
+        run: docker compose --profile test run --rm --no-deps e2e node tool/e2e-security.mjs
+
+      - name: Verify database tenant and owner constraints with invalid writes
+        id: database_integrity
+        run: |
+          docker compose --profile test run --rm --no-deps \
+            -v "$GITHUB_WORKSPACE/artifacts:/artifacts" \
+            -e E2E_RESULT_PATH=/artifacts/database-integrity.json \
+            e2e node tool/e2e-database-integrity.mjs
+
+      - name: Verify retention continues for disabled applications
+        id: retention
+        run: |
+          docker compose --profile test run --rm --no-deps \
+            -v "$GITHUB_WORKSPACE/artifacts:/artifacts" \
+            -e E2E_RESULT_PATH=/artifacts/retention.json \
+            e2e node tool/e2e-retention.mjs
+
+      - name: Capture structured result and diagnostics
+        if: always()
+        shell: bash
+        run: |
+          docker compose ps --all --format json > artifacts/compose-ps.json 2>&1 || true
+          docker compose logs --no-color --timestamps > artifacts/compose.log 2>&1 || true
+          image_ids=$(docker compose images -q | sort -u)
+          if [[ -n "$image_ids" ]]; then
+            docker image inspect $image_ids | jq '[.[] | {id:.Id,repoDigests:(.RepoDigests // []),repoTags:(.RepoTags // [])}]' > artifacts/images.json
+          else
+            echo '[]' > artifacts/images.json
+          fi
+          jq -n \
+            --arg scenario core \
+            --arg start '${{ steps.start.outcome }}' \
+            --arg migration '${{ steps.migration.outcome }}' \
+            --arg business '${{ steps.business.outcome }}' \
+            --arg security '${{ steps.security.outcome }}' \
+            --arg databaseIntegrity '${{ steps.database_integrity.outcome }}' \
+            --arg retention '${{ steps.retention.outcome }}' \
+            '{scenario:$scenario,steps:{start:$start,migration:$migration,business:$business,security:$security,databaseIntegrity:$databaseIntegrity,retention:$retention}}' \
+            > artifacts/result.json
+          EVIDENCE_SCENARIO=core node server/tool/e2e-evidence-manifest.mjs
+
+      - name: Upload core evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: compose-core-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Remove core containers, networks, and volumes
+        if: always()
+        run: docker compose --profile test down --volumes --remove-orphans --timeout 10
+
+  resilience:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      COMPOSE_PROJECT_NAME: study-room-resilience-${{ github.run_id }}-${{ github.run_attempt }}
+      POSTGRES_PASSWORD: resilience-${{ github.run_id }}-${{ github.run_attempt }}
+      NODE_ENV: test
+      STUDY_ROOM_RUNTIME_PROFILE: test
+      STUDY_ROOM_ALLOW_INSECURE_JWKS: "true"
+      STUDY_ROOM_ADMIN_JWKS_URL: http://jwks:4000/admin/jwks.json
+      STUDY_ROOM_ADMIN_JWT_ISSUER: http://jwks:4000/admin
+      STUDY_ROOM_ADMIN_JWT_AUDIENCE: study-room-admin
+      E2E_FIXTURE_CONTROL_TOKEN: resilience-fixture-${{ github.run_id }}-${{ github.run_attempt }}
+      E2E_ALLOW_SHORT_LIVED_TOKENS: "true"
+      E2E_RUN_ID: resilience-${{ github.run_id }}-${{ github.run_attempt }}
       STUDY_ROOM_PRESENCE_TTL_SECONDS: 4
       STUDY_ROOM_PRESENCE_REFRESH_SECONDS: 1
       E2E_PRESENCE_EXPIRE_WAIT_MS: 6000
     steps:
       - uses: actions/checkout@v4
-
-      - name: Start two-instance stack
-        run: docker compose up --build --detach --wait proxy
-
-      - name: Cross-instance business flow
-        run: docker compose --profile test run --rm e2e
-
-      - name: Prepare persisted state
-        run: docker compose --profile test run --rm -e E2E_PHASE=setup e2e node tool/e2e-persistence.mjs
-
-      - name: Restart PostgreSQL and both APIs
+      - name: Initialize evidence timing
         run: |
-          docker compose stop api-1 api-2
-          docker compose restart postgres
-          docker compose up --detach --wait postgres api-1 api-2 proxy
+          mkdir -p artifacts
+          date +%s > artifacts/job-started-at-epoch
 
-      - name: Verify persisted state
-        run: docker compose --profile test run --rm -e E2E_PHASE=verify e2e node tool/e2e-persistence.mjs
+      - name: Start isolated resilience stack
+        id: start
+        run: |
+          docker compose --profile test up --build --detach --wait postgres redis jwks
+          docker compose --profile test run --rm migrate
+          docker compose --profile test run --rm --no-deps seed
+          docker compose --profile test up --build --detach --wait proxy
 
-      - name: Authentication, tenant, rotation, expiry, and disable scenarios
-        run: docker compose --profile test run --rm e2e node tool/e2e-security.mjs
-
-      - name: Verify presence expiry after an abnormal API exit
+      - name: Verify dependency readiness failure and recovery
+        id: dependencies
         shell: bash
         run: |
           set -euo pipefail
-          docker compose --profile test run --rm e2e node tool/e2e-presence-crash.mjs &
+          expect_status() {
+            local expected="$1"
+            local url="$2"
+            local token="${3:-}"
+            for _ in $(seq 1 45); do
+              if [[ -n "$token" ]]; then
+                status=$(curl --max-time 8 --silent --output /dev/null --write-out '%{http_code}' \
+                  --header "Authorization: Bearer $token" "$url" || true)
+              else
+                status=$(curl --max-time 8 --silent --output /dev/null --write-out '%{http_code}' "$url" || true)
+              fi
+              if [[ "$status" == "$expected" ]]; then return 0; fi
+              sleep 1
+            done
+            echo "Expected $url to return $expected" >&2
+            return 1
+          }
+          expect_json_error() {
+            local expected_status="$1"
+            local expected_code="$2"
+            local url="$3"
+            local token="$4"
+            local output="$5"
+            for _ in $(seq 1 45); do
+              status=$(curl --max-time 8 --silent --output "$output" --write-out '%{http_code}' \
+                --header "Authorization: Bearer $token" "$url" || true)
+              code=$(jq -r '.code // empty' "$output" 2>/dev/null || true)
+              if [[ "$status" == "$expected_status" && "$code" == "$expected_code" ]]; then return 0; fi
+              sleep 1
+            done
+            echo "Expected $url to return $expected_status/$expected_code" >&2
+            return 1
+          }
+
+          business_token=$(curl --max-time 8 --fail --silent --show-error \
+            --header 'content-type: application/json' \
+            --data "{\"sub\":\"resilience-${E2E_RUN_ID}\",\"displayName\":\"Resilience Probe\"}" \
+            http://localhost:4000/token | jq -er '.accessToken')
+
+          docker compose stop redis
+          expect_status 200 http://localhost:3000/health/live
+          expect_status 503 http://localhost:3000/health/ready
+          expect_json_error 503 rate_limit_unavailable http://localhost:3000/v1/rooms \
+            "$business_token" artifacts/redis-down-business.json
+          docker compose up --detach --wait redis
+          expect_status 200 http://localhost:3000/health/ready
+          expect_status 200 http://localhost:3000/v1/rooms "$business_token"
+
+          docker compose stop postgres
+          expect_status 200 http://localhost:3000/health/live
+          expect_status 503 http://localhost:3000/health/ready
+          docker compose up --detach --wait postgres
+          expect_status 200 http://localhost:3000/health/ready
+          jq -n \
+            '{redisDown:{live:200,ready:503,businessStatus:503,businessCode:"rate_limit_unavailable"},redisRecovered:{ready:200,businessStatus:200},postgresDown:{live:200,ready:503},postgresRecovered:{ready:200}}' \
+            > artifacts/dependencies.json
+
+      - name: Verify rolling replacement through dynamically resolved nginx upstreams
+        id: rolling
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker compose --profile test run --rm --no-deps \
+            -v "$GITHUB_WORKSPACE/artifacts:/artifacts" \
+            -e E2E_PROBE_DURATION_MS=30000 \
+            -e E2E_RESULT_PATH=/artifacts/rolling-probe.json \
+            e2e node tool/e2e-proxy-probe.mjs &
+          probe_pid=$!
+          cleanup_probe() {
+            if kill -0 "$probe_pid" 2>/dev/null; then kill "$probe_pid" || true; fi
+          }
+          trap cleanup_probe EXIT
+          sleep 3
+          docker compose --profile test up --detach --force-recreate --no-deps --wait api-1
+          sleep 3
+          docker compose --profile test up --detach --force-recreate --no-deps --wait api-2
+          wait "$probe_pid"
+          trap - EXIT
+
+      - name: Verify liveness, readiness, and protected metrics
+        id: operations
+        run: |
+          docker compose --profile test run --rm --no-deps \
+            -v "$GITHUB_WORKSPACE/artifacts:/artifacts" \
+            -e E2E_RESULT_PATH=/artifacts/operations.json \
+            e2e node tool/e2e-operations.mjs
+
+      - name: Verify presence expiry after SIGKILL
+        id: crash
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker compose --profile test run --rm --no-deps e2e node tool/e2e-presence-crash.mjs &
           crash_test_pid=$!
           cleanup_background() {
             if kill -0 "$crash_test_pid" 2>/dev/null; then kill "$crash_test_pid" || true; fi
@@ -80,25 +338,262 @@ jobs:
           docker kill --signal KILL "$api_2_id"
           wait "$crash_test_pid"
           trap - EXIT
-          docker compose up --detach --force-recreate --wait api-2
+          docker compose --profile test up --detach --force-recreate --no-deps --wait api-2
 
-      - name: Capture Compose diagnostics
+      - name: Capture structured result and diagnostics
         if: always()
+        shell: bash
         run: |
-          docker compose ps --all > compose-ps.txt 2>&1 || true
-          docker compose logs --no-color --timestamps > compose-integration.log 2>&1 || true
+          docker compose ps --all --format json > artifacts/compose-ps.json 2>&1 || true
+          docker compose logs --no-color --timestamps > artifacts/compose.log 2>&1 || true
+          image_ids=$(docker compose images -q | sort -u)
+          if [[ -n "$image_ids" ]]; then
+            docker image inspect $image_ids | jq '[.[] | {id:.Id,repoDigests:(.RepoDigests // []),repoTags:(.RepoTags // [])}]' > artifacts/images.json
+          else
+            echo '[]' > artifacts/images.json
+          fi
+          jq -n \
+            --arg scenario resilience \
+            --arg start '${{ steps.start.outcome }}' \
+            --arg dependencies '${{ steps.dependencies.outcome }}' \
+            --arg rolling '${{ steps.rolling.outcome }}' \
+            --arg operations '${{ steps.operations.outcome }}' \
+            --arg crash '${{ steps.crash.outcome }}' \
+            '{scenario:$scenario,steps:{start:$start,dependencies:$dependencies,rolling:$rolling,operations:$operations,crash:$crash}}' \
+            > artifacts/result.json
+          EVIDENCE_SCENARIO=resilience node server/tool/e2e-evidence-manifest.mjs
 
-      - name: Upload Compose diagnostics
+      - name: Upload resilience evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: compose-integration-${{ github.run_id }}-${{ github.run_attempt }}
-          path: |
-            compose-ps.txt
-            compose-integration.log
-          if-no-files-found: ignore
-          retention-days: 7
+          name: compose-resilience-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts
+          if-no-files-found: error
+          retention-days: 14
 
-      - name: Remove integration resources
+      - name: Remove resilience containers, networks, and volumes
         if: always()
-        run: docker compose down --volumes --remove-orphans --timeout 10
+        run: docker compose --profile test down --volumes --remove-orphans --timeout 10
+
+  restore:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      COMPOSE_PROJECT_NAME: study-room-restore-${{ github.run_id }}-${{ github.run_attempt }}
+      POSTGRES_PASSWORD: restore-${{ github.run_id }}-${{ github.run_attempt }}
+      NODE_ENV: test
+      STUDY_ROOM_RUNTIME_PROFILE: test
+      STUDY_ROOM_ALLOW_INSECURE_JWKS: "true"
+      STUDY_ROOM_ADMIN_JWKS_URL: http://jwks:4000/admin/jwks.json
+      STUDY_ROOM_ADMIN_JWT_ISSUER: http://jwks:4000/admin
+      STUDY_ROOM_ADMIN_JWT_AUDIENCE: study-room-admin
+      E2E_FIXTURE_CONTROL_TOKEN: restore-fixture-${{ github.run_id }}-${{ github.run_attempt }}
+      E2E_RUN_ID: restore-${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Initialize evidence timing
+        run: |
+          mkdir -p artifacts
+          date +%s > artifacts/job-started-at-epoch
+
+      - name: Start isolated restore stack
+        id: start
+        run: |
+          docker compose --profile test up --build --detach --wait postgres redis jwks
+          docker compose --profile test run --rm migrate
+          docker compose --profile test run --rm --no-deps seed
+          docker compose --profile test up --build --detach --wait proxy
+
+      - name: Create data for logical backup
+        id: setup
+        run: docker compose --profile test run --rm --no-deps -e E2E_PHASE=setup -e E2E_STATE_PATH=/state/restore.json e2e node tool/e2e-restore.mjs
+
+      - name: Dump and restore into a fresh PostgreSQL database
+        id: backup_restore
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker compose exec -T postgres sh -ec 'pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Fc -f /tmp/study-room.dump'
+          docker compose exec -T postgres sh -ec 'pg_restore -l /tmp/study-room.dump' > artifacts/restore-list.txt
+          docker compose cp postgres:/tmp/study-room.dump artifacts/study-room.dump
+          dump_sha256=$(sha256sum artifacts/study-room.dump | cut -d ' ' -f 1)
+          dump_size=$(stat -c '%s' artifacts/study-room.dump)
+          jq -n \
+            --arg sha256 "$dump_sha256" \
+            --argjson sizeBytes "$dump_size" \
+            --arg format postgresql-custom \
+            '{format:$format,sizeBytes:$sizeBytes,sha256:$sha256}' \
+            > artifacts/dump-metadata.json
+          docker compose exec -T postgres dropdb --if-exists -U study_room study_room_restore
+          docker compose exec -T postgres createdb -U study_room study_room_restore
+          docker compose exec -T postgres pg_restore --exit-on-error -U study_room -d study_room_restore /tmp/study-room.dump
+
+      - name: Recreate both APIs against the restored database
+        id: switch_database
+        shell: bash
+        run: POSTGRES_DB=study_room_restore docker compose --profile test up --detach --force-recreate --no-deps --wait api-1 api-2
+
+      - name: Verify restored data through both APIs
+        id: verify
+        run: |
+          docker compose --profile test run --rm --no-deps \
+            -v "$GITHUB_WORKSPACE/artifacts:/artifacts" \
+            -e E2E_PHASE=verify \
+            -e E2E_STATE_PATH=/state/restore.json \
+            -e E2E_RESULT_PATH=/artifacts/restore.json \
+            e2e node tool/e2e-restore.mjs
+
+      - name: Capture structured result and diagnostics
+        if: always()
+        shell: bash
+        run: |
+          docker compose ps --all --format json > artifacts/compose-ps.json 2>&1 || true
+          docker compose logs --no-color --timestamps > artifacts/compose.log 2>&1 || true
+          image_ids=$(docker compose images -q | sort -u)
+          if [[ -n "$image_ids" ]]; then
+            docker image inspect $image_ids | jq '[.[] | {id:.Id,repoDigests:(.RepoDigests // []),repoTags:(.RepoTags // [])}]' > artifacts/images.json
+          else
+            echo '[]' > artifacts/images.json
+          fi
+          jq -n \
+            --arg scenario restore \
+            --arg start '${{ steps.start.outcome }}' \
+            --arg setup '${{ steps.setup.outcome }}' \
+            --arg backupRestore '${{ steps.backup_restore.outcome }}' \
+            --arg switchDatabase '${{ steps.switch_database.outcome }}' \
+            --arg verify '${{ steps.verify.outcome }}' \
+            '{scenario:$scenario,steps:{start:$start,setup:$setup,backupRestore:$backupRestore,switchDatabase:$switchDatabase,verify:$verify}}' \
+            > artifacts/result.json
+          EVIDENCE_SCENARIO=restore node server/tool/e2e-evidence-manifest.mjs
+
+      - name: Upload restore evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: compose-restore-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Remove restore containers, networks, and volumes
+        if: always()
+        run: docker compose --profile test down --volumes --remove-orphans --timeout 10
+
+  soak:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      COMPOSE_PROJECT_NAME: study-room-soak-${{ github.run_id }}-${{ github.run_attempt }}
+      POSTGRES_PASSWORD: soak-${{ github.run_id }}-${{ github.run_attempt }}
+      NODE_ENV: test
+      STUDY_ROOM_RUNTIME_PROFILE: test
+      STUDY_ROOM_ALLOW_INSECURE_JWKS: "true"
+      STUDY_ROOM_ADMIN_JWKS_URL: http://jwks:4000/admin/jwks.json
+      STUDY_ROOM_ADMIN_JWT_ISSUER: http://jwks:4000/admin
+      STUDY_ROOM_ADMIN_JWT_AUDIENCE: study-room-admin
+      E2E_FIXTURE_CONTROL_TOKEN: soak-fixture-${{ github.run_id }}-${{ github.run_attempt }}
+      E2E_RUN_ID: soak-${{ github.run_id }}-${{ github.run_attempt }}
+      STUDY_ROOM_PRESENCE_TTL_SECONDS: 20
+      STUDY_ROOM_PRESENCE_REFRESH_SECONDS: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Initialize evidence timing
+        run: |
+          mkdir -p artifacts
+          date +%s > artifacts/job-started-at-epoch
+
+      - name: Start isolated soak stack
+        id: start
+        run: |
+          docker compose --profile test up --build --detach --wait postgres redis jwks
+          docker compose --profile test run --rm migrate
+          docker compose --profile test run --rm --no-deps seed
+          docker compose --profile test up --build --detach --wait proxy
+
+      - name: Run ten-minute mixed HTTP/WebSocket soak with rolling replacements
+        id: workload
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker compose --profile test run --rm --no-deps \
+            -v "$GITHUB_WORKSPACE/artifacts:/artifacts" \
+            -e E2E_SOAK_DURATION_MS=600000 \
+            -e E2E_EXPECTED_RECONNECTS=2 \
+            -e E2E_RESULT_PATH=/artifacts/soak.json \
+            e2e node tool/e2e-soak.mjs &
+          soak_pid=$!
+          cleanup_soak() {
+            if kill -0 "$soak_pid" 2>/dev/null; then kill "$soak_pid" || true; fi
+          }
+          trap cleanup_soak EXIT
+          jq -n \
+            '{"api-1":{plannedOffsetSeconds:120,startedAt:null,completedAt:null},"api-2":{plannedOffsetSeconds:300,startedAt:null,completedAt:null}}' \
+            > artifacts/soak-replacements.json
+          record_replacement() {
+            local service="$1"
+            local field="$2"
+            local timestamp
+            timestamp=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
+            jq --arg service "$service" --arg field "$field" --arg timestamp "$timestamp" \
+              '.[$service][$field] = $timestamp' artifacts/soak-replacements.json \
+              > artifacts/soak-replacements.tmp
+            mv artifacts/soak-replacements.tmp artifacts/soak-replacements.json
+          }
+
+          ready=false
+          for _ in $(seq 1 90); do
+            if docker compose exec -T redis redis-cli EXISTS "e2e:soak:${E2E_RUN_ID}" | grep -q '^1'; then
+              ready=true
+              break
+            fi
+            sleep 1
+          done
+          if [[ "$ready" != true ]]; then
+            echo "Soak workload did not become ready" >&2
+            exit 1
+          fi
+
+          sleep 120
+          record_replacement api-1 startedAt
+          docker compose --profile test up --detach --force-recreate --no-deps --wait api-1
+          record_replacement api-1 completedAt
+          sleep 180
+          record_replacement api-2 startedAt
+          docker compose --profile test up --detach --force-recreate --no-deps --wait api-2
+          record_replacement api-2 completedAt
+          wait "$soak_pid"
+          trap - EXIT
+
+      - name: Capture structured result and diagnostics
+        if: always()
+        shell: bash
+        run: |
+          docker compose ps --all --format json > artifacts/compose-ps.json 2>&1 || true
+          docker compose logs --no-color --timestamps > artifacts/compose.log 2>&1 || true
+          image_ids=$(docker compose images -q | sort -u)
+          if [[ -n "$image_ids" ]]; then
+            docker image inspect $image_ids | jq '[.[] | {id:.Id,repoDigests:(.RepoDigests // []),repoTags:(.RepoTags // [])}]' > artifacts/images.json
+          else
+            echo '[]' > artifacts/images.json
+          fi
+          jq -n \
+            --arg scenario soak \
+            --arg start '${{ steps.start.outcome }}' \
+            --arg workload '${{ steps.workload.outcome }}' \
+            '{scenario:$scenario,steps:{start:$start,workload:$workload}}' \
+            > artifacts/result.json
+          EVIDENCE_SCENARIO=soak node server/tool/e2e-evidence-manifest.mjs
+
+      - name: Upload soak evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: compose-soak-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Remove soak containers, networks, and volumes
+        if: always()
+        run: docker compose --profile test down --volumes --remove-orphans --timeout 10

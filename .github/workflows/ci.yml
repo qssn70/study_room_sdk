@@ -2,10 +2,16 @@ name: CI
 
 on:
   push:
+    branches: [main]
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   dart-dependency-security:
@@ -28,9 +34,25 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm --workspace study-room-server run db:generate
-      - run: npm run generate:contracts
-      - run: npm run check:contracts
-      - run: git diff --exit-code -- contracts server/src/generated packages/study_room_sdk/lib/src/generated_contract.dart
+      - name: Generate OpenAPI-derived TypeScript, DTO, and Dart artifacts
+        run: npm run generate:contracts
+      - name: Validate OpenAPI and generated artifacts
+        run: npm run check:contracts
+      - name: Verify generated artifacts have no diff
+        shell: bash
+        run: |
+          generated_status="$(git status --porcelain --untracked-files=all -- \
+            server/src/generated/contract-types.ts \
+            server/src/generated/request-dtos.ts \
+            packages/study_room_sdk/lib/src/generated_contract.dart)"
+          if [[ -n "$generated_status" ]]; then
+            echo "$generated_status"
+            git diff -- \
+              server/src/generated/contract-types.ts \
+              server/src/generated/request-dtos.ts \
+              packages/study_room_sdk/lib/src/generated_contract.dart
+            exit 1
+          fi
       - run: npm run build
       - run: npm --workspace study-room-server run test:coverage
       - run: npm audit --audit-level=high
@@ -44,9 +66,29 @@ jobs:
           node-version: 22
       - uses: subosito/flutter-action@v2
         with:
-          channel: stable
+          flutter-version: '3.44.1'
           cache: true
       - run: flutter pub get
+      - name: Regenerate Flutter localization artifacts
+        shell: bash
+        run: |
+          (cd packages/study_room_ui && flutter gen-l10n && dart run tool/generate_localizations_compat.dart)
+          (cd apps/example_flutter && flutter gen-l10n)
+      - name: Verify Flutter localization artifacts have no diff
+        shell: bash
+        run: |
+          localization_status="$(git status --porcelain --untracked-files=all -- \
+            packages/study_room_ui/lib/src/generated/l10n \
+            packages/study_room_ui/lib/src/localizations_compat.dart \
+            apps/example_flutter/lib/l10n/generated)"
+          if [[ -n "$localization_status" ]]; then
+            echo "$localization_status"
+            git diff -- \
+              packages/study_room_ui/lib/src/generated/l10n \
+              packages/study_room_ui/lib/src/localizations_compat.dart \
+              apps/example_flutter/lib/l10n/generated
+            exit 1
+          fi
       - name: Analyze SDK, UI, and example
         run: |
           dart analyze packages/study_room_sdk
@@ -68,11 +110,60 @@ jobs:
           (cd packages/study_room_sdk && dart pub publish --dry-run)
           (cd packages/study_room_ui && flutter pub publish --dry-run)
 
-  compose-config:
+  golden:
+    name: Golden tests (Ubuntu)
     runs-on: ubuntu-latest
-    env:
-      POSTGRES_PASSWORD: ci-only-compose-validation
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
-      - run: docker compose config --quiet
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.44.1'
+          cache: true
+      - run: flutter pub get
+      - name: Run UI tests including Golden comparisons
+        working-directory: packages/study_room_ui
+        run: flutter test --no-pub --dart-define=STUDY_ROOM_RUN_GOLDENS=true test/golden/study_room_golden_harness_test.dart
+      - name: Upload Golden expected, actual, and diff images
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: golden-failure-${{ github.sha }}
+          path: |
+            packages/study_room_ui/test/golden/baselines/**
+            packages/study_room_ui/test/failures/**
+          if-no-files-found: warn
+          retention-days: 14
+
+  compose-config:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate secure default Compose profile
+        shell: bash
+        env:
+          POSTGRES_PASSWORD: ci-only-compose-validation
+          STUDY_ROOM_ADMIN_JWKS_URL: https://admin.example.test/jwks.json
+          STUDY_ROOM_ADMIN_JWT_ISSUER: https://admin.example.test
+          STUDY_ROOM_ADMIN_JWT_AUDIENCE: study-room-admin
+        run: |
+          set -euo pipefail
+          docker compose config > /tmp/study-room-compose-base.yml
+          diff -u \
+            <(printf '%s\n' api-1 api-2 migrate postgres proxy redis | sort) \
+            <(docker compose config --services | sort)
+          if grep -Fq 'jwks:4000' /tmp/study-room-compose-base.yml || \
+             grep -Fq 'E2E_FIXTURE_CONTROL_TOKEN' /tmp/study-room-compose-base.yml || \
+             grep -Eq 'STUDY_ROOM_ALLOW_INSECURE_JWKS:.*true' /tmp/study-room-compose-base.yml; then
+            echo 'Default Compose profile contains a dev/test JWKS fixture setting' >&2
+            exit 1
+          fi
+      - name: Validate explicit development profile
+        env:
+          POSTGRES_PASSWORD: ci-only-compose-validation
+        run: docker compose --env-file .env.dev.example --profile dev config --quiet
+      - name: Validate explicit test profile
+        env:
+          POSTGRES_PASSWORD: ci-only-compose-validation
+        run: docker compose --env-file .env.test.example --profile test config --quiet
       - run: docker build -f server/Dockerfile .
