@@ -225,17 +225,51 @@ jobs:
             local expected="$1"
             local url="$2"
             local token="${3:-}"
+            local label="${4:-probe}"
+            local body="artifacts/${label}.body"
+            local started_at
+            local curl_metrics=""
+            local last_status="000"
+            local last_curl_exit="0"
+            local last_request_seconds="0"
+            local elapsed_seconds="0"
+            local curl_args=(
+              --max-time 8
+              --silent
+              --show-error
+              --output "$body"
+              --write-out $'%{http_code}\t%{time_total}'
+            )
+            started_at=$(date +%s)
             for _ in $(seq 1 45); do
+              : > "$body"
               if [[ -n "$token" ]]; then
-                status=$(curl --max-time 8 --silent --output /dev/null --write-out '%{http_code}' \
-                  --header "Authorization: Bearer $token" "$url" || true)
+                if curl_metrics=$(curl "${curl_args[@]}" \
+                  --header "Authorization: Bearer $token" "$url"); then
+                  last_curl_exit=0
+                else
+                  last_curl_exit=$?
+                fi
               else
-                status=$(curl --max-time 8 --silent --output /dev/null --write-out '%{http_code}' "$url" || true)
+                if curl_metrics=$(curl "${curl_args[@]}" "$url"); then
+                  last_curl_exit=0
+                else
+                  last_curl_exit=$?
+                fi
               fi
-              if [[ "$status" == "$expected" ]]; then return 0; fi
+              IFS=$'\t' read -r last_status last_request_seconds <<< "$curl_metrics"
+              last_status="${last_status:-000}"
+              last_request_seconds="${last_request_seconds:-0}"
+              if [[ "$last_status" == "$expected" ]]; then return 0; fi
               sleep 1
             done
-            echo "Expected $url to return $expected" >&2
+            elapsed_seconds=$(( $(date +%s) - started_at ))
+            printf 'Expected %s to return %s; last_status=%s curl_exit=%s request_seconds=%s elapsed_seconds=%s\n' \
+              "$url" "$expected" "$last_status" "$last_curl_exit" \
+              "$last_request_seconds" "$elapsed_seconds" >&2
+            echo 'Last response body:' >&2
+            cat "$body" >&2
+            echo >&2
             return 1
           }
           expect_json_error() {
@@ -244,38 +278,82 @@ jobs:
             local url="$3"
             local token="$4"
             local output="$5"
+            local started_at
+            local curl_metrics=""
+            local last_status="000"
+            local last_code=""
+            local last_curl_exit="0"
+            local last_request_seconds="0"
+            local elapsed_seconds="0"
+            started_at=$(date +%s)
             for _ in $(seq 1 45); do
-              status=$(curl --max-time 8 --silent --output "$output" --write-out '%{http_code}' \
-                --header "Authorization: Bearer $token" "$url" || true)
-              code=$(jq -r '.code // empty' "$output" 2>/dev/null || true)
-              if [[ "$status" == "$expected_status" && "$code" == "$expected_code" ]]; then return 0; fi
+              : > "$output"
+              if curl_metrics=$(curl --max-time 8 --silent --show-error \
+                --output "$output" --write-out $'%{http_code}\t%{time_total}' \
+                --header "Authorization: Bearer $token" "$url"); then
+                last_curl_exit=0
+              else
+                last_curl_exit=$?
+              fi
+              IFS=$'\t' read -r last_status last_request_seconds <<< "$curl_metrics"
+              last_status="${last_status:-000}"
+              last_request_seconds="${last_request_seconds:-0}"
+              last_code=$(jq -r '.code // empty' "$output" 2>/dev/null || true)
+              if [[ "$last_status" == "$expected_status" && "$last_code" == "$expected_code" ]]; then return 0; fi
               sleep 1
             done
-            echo "Expected $url to return $expected_status/$expected_code" >&2
+            elapsed_seconds=$(( $(date +%s) - started_at ))
+            printf 'Expected %s to return %s/%s; last_status=%s last_code=%s curl_exit=%s request_seconds=%s elapsed_seconds=%s\n' \
+              "$url" "$expected_status" "$expected_code" "$last_status" \
+              "${last_code:-<empty>}" "$last_curl_exit" "$last_request_seconds" \
+              "$elapsed_seconds" >&2
+            echo 'Last response body:' >&2
+            cat "$output" >&2
+            echo >&2
             return 1
+          }
+          service_url() {
+            local service="$1"
+            local container_id
+            local address
+            container_id=$(docker compose ps -q "$service")
+            address=$(docker inspect "$container_id" | jq -er \
+              '.[0].NetworkSettings.Networks | to_entries | map(.value.IPAddress | select(length > 0)) | first')
+            printf 'http://%s:3000' "$address"
           }
 
           business_token=$(curl --max-time 8 --fail --silent --show-error \
             --header 'content-type: application/json' \
             --data "{\"sub\":\"resilience-${E2E_RUN_ID}\",\"displayName\":\"Resilience Probe\"}" \
             http://localhost:4000/token | jq -er '.accessToken')
+          api_1_url=$(service_url api-1)
+          api_2_url=$(service_url api-2)
+          proxy_url=http://localhost:3000
 
           docker compose stop redis
-          expect_status 200 http://localhost:3000/health/live
-          expect_status 503 http://localhost:3000/health/ready
-          expect_json_error 503 rate_limit_unavailable http://localhost:3000/v1/rooms \
+          expect_status 200 "$proxy_url/health/live" '' redis-down-proxy-live
+          expect_status 503 "$api_1_url/health/ready" '' redis-down-api-1-ready
+          expect_status 503 "$api_2_url/health/ready" '' redis-down-api-2-ready
+          expect_status 503 "$proxy_url/health/ready" '' redis-down-proxy-ready
+          expect_json_error 503 rate_limit_unavailable "$proxy_url/v1/rooms" \
             "$business_token" artifacts/redis-down-business.json
           docker compose up --detach --wait redis
-          expect_status 200 http://localhost:3000/health/ready
-          expect_status 200 http://localhost:3000/v1/rooms "$business_token"
+          expect_status 200 "$api_1_url/health/ready" '' redis-recovered-api-1-ready
+          expect_status 200 "$api_2_url/health/ready" '' redis-recovered-api-2-ready
+          expect_status 200 "$proxy_url/health/ready" '' redis-recovered-proxy-ready
+          expect_status 200 "$proxy_url/v1/rooms" "$business_token" redis-recovered-business
 
-          docker compose stop postgres
-          expect_status 200 http://localhost:3000/health/live
-          expect_status 503 http://localhost:3000/health/ready
+          docker compose stop --timeout 0 postgres
+          expect_status 200 "$proxy_url/health/live" '' postgres-down-proxy-live
+          expect_status 503 "$api_1_url/health/ready" '' postgres-down-api-1-ready
+          expect_status 503 "$api_2_url/health/ready" '' postgres-down-api-2-ready
+          expect_status 503 "$proxy_url/health/ready" '' postgres-down-proxy-ready
           docker compose up --detach --wait postgres
-          expect_status 200 http://localhost:3000/health/ready
+          expect_status 200 "$api_1_url/health/ready" '' postgres-recovered-api-1-ready
+          expect_status 200 "$api_2_url/health/ready" '' postgres-recovered-api-2-ready
+          expect_status 200 "$proxy_url/health/ready" '' postgres-recovered-proxy-ready
           jq -n \
-            '{redisDown:{live:200,ready:503,businessStatus:503,businessCode:"rate_limit_unavailable"},redisRecovered:{ready:200,businessStatus:200},postgresDown:{live:200,ready:503},postgresRecovered:{ready:200}}' \
+            '{redisDown:{live:200,api1Ready:503,api2Ready:503,proxyReady:503,businessStatus:503,businessCode:"rate_limit_unavailable"},redisRecovered:{api1Ready:200,api2Ready:200,proxyReady:200,businessStatus:200},postgresDown:{live:200,api1Ready:503,api2Ready:503,proxyReady:503},postgresRecovered:{api1Ready:200,api2Ready:200,proxyReady:200}}' \
             > artifacts/dependencies.json
 
       - name: Verify rolling replacement through dynamically resolved nginx upstreams

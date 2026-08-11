@@ -5,6 +5,8 @@ import { RedisService } from '../redis/redis.service';
 import { MetricsService } from './metrics.service';
 import { SkipRateLimit } from '../common/rate-limit.decorators';
 
+const READINESS_DEADLINE_MS = 3_000;
+
 @Controller()
 export class OperationsController {
   constructor(
@@ -25,11 +27,32 @@ export class OperationsController {
   @Get('health/ready')
   async ready() {
     try {
-      await this.prisma.$queryRaw`SELECT 1`;
-      if (!(await this.redis.ping())) throw new Error('Redis is unavailable');
+      await this.withDeadline(Promise.all([
+        this.prisma.$queryRaw`SELECT 1`,
+        this.redis.ping().then((available) => {
+          if (!available) throw new Error('Redis is unavailable');
+        }),
+      ]));
       return { status: 'ready' };
     } catch {
       throw new ServiceUnavailableException('Dependencies are unavailable');
+    }
+  }
+
+  private async withDeadline<T>(operation: Promise<T>): Promise<T> {
+    let timeout: NodeJS.Timeout | undefined;
+    try {
+      return await Promise.race([
+        operation,
+        new Promise<never>((_, reject) => {
+          timeout = setTimeout(
+            () => reject(new Error('Readiness probe timed out')),
+            READINESS_DEADLINE_MS,
+          );
+        }),
+      ]);
+    } finally {
+      if (timeout) clearTimeout(timeout);
     }
   }
 
