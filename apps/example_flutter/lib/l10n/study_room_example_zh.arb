@@ -1,0 +1,15 @@
+{
+  "@@locale": "zh",
+  "styleSplit": "分栏",
+  "styleCentered": "居中",
+  "styleImmersive": "沉浸",
+  "openRoomWorkflow": "打开在线房间流程",
+  "rooms": "房间",
+  "workflowTitle": "Study Room 0.4 流程",
+  "membersTab": "成员",
+  "requestsTab": "申请",
+  "configurationInstructions": "请使用 --dart-define=STUDY_ROOM_API_URL=http://localhost:3000 --dart-define=STUDY_ROOM_REALTIME_URL=ws://localhost:3000/v1/realtime --dart-define=STUDY_ROOM_TOKEN=<jwt> --dart-define=STUDY_ROOM_TOKEN_EXPIRES_AT=<unix-seconds> 运行。",
+  "demoRoomTitle": "示例专注房间",
+  "currentUserName": "你",
+  "startupFailed": "无法启动在线房间流程，请检查配置后重试。"
+}

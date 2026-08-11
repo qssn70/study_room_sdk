@@ -1,0 +1,15 @@
+{
+  "@@locale": "en",
+  "styleSplit": "Split",
+  "styleCentered": "Centered",
+  "styleImmersive": "Immersive",
+  "openRoomWorkflow": "Open live room workflow",
+  "rooms": "Rooms",
+  "workflowTitle": "Study Room 0.4 workflow",
+  "membersTab": "Members",
+  "requestsTab": "Requests",
+  "configurationInstructions": "Run with --dart-define=STUDY_ROOM_API_URL=http://localhost:3000 --dart-define=STUDY_ROOM_REALTIME_URL=ws://localhost:3000/v1/realtime --dart-define=STUDY_ROOM_TOKEN=<jwt> --dart-define=STUDY_ROOM_TOKEN_EXPIRES_AT=<unix-seconds>.",
+  "demoRoomTitle": "Demo Focus Room",
+  "currentUserName": "You",
+  "startupFailed": "Unable to start the live room workflow. Check the configuration and try again."
+}

@@ -1,0 +1,7 @@
+arb-dir: lib/l10n
+template-arb-file: study_room_example_en.arb
+output-dir: lib/l10n/generated
+output-localization-file: study_room_example_localizations.dart
+output-class: StudyRoomExampleLocalizations
+nullable-getter: false
+format: true

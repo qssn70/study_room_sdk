@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:study_room_sdk/study_room_sdk.dart';
+import 'package:study_room_ui/src/focus_clock.dart';
 import 'package:study_room_ui/study_room_ui.dart';
 
 const _testBackground = StudyBackground.color(
@@ -62,12 +63,12 @@ void main() {
         findsOneWidget,
       );
       expect(find.text('25:00'), findsOneWidget);
-      expect(find.text('自定义'), findsOneWidget);
-      expect(find.text('结束'), findsOneWidget);
-      expect(find.text('跳过'), findsOneWidget);
-      expect(find.text('统计'), findsOneWidget);
-      expect(find.text('成员'), findsOneWidget);
-      expect(find.text('雨声'), findsWidgets);
+      expect(find.text('Custom'), findsOneWidget);
+      expect(find.text('Finish'), findsOneWidget);
+      expect(find.text('Skip'), findsOneWidget);
+      expect(find.text('Stats'), findsOneWidget);
+      expect(find.text('Members'), findsOneWidget);
+      expect(find.text('Rain'), findsWidgets);
       expect(find.byIcon(Icons.bar_chart), findsOneWidget);
       expect(find.byIcon(Icons.music_note), findsOneWidget);
       expect(find.byIcon(Icons.group), findsOneWidget);
@@ -124,10 +125,10 @@ void main() {
         findsOneWidget,
       );
       expect(find.text('Kai'), findsOneWidget);
-      expect(find.text('陪伴中'), findsOneWidget);
-      expect(find.text('今日目标'), findsOneWidget);
-      expect(find.text('背景音'), findsOneWidget);
-      expect(find.text('个人统计（私密）'), findsOneWidget);
+      expect(find.text('Studying together'), findsOneWidget);
+      expect(find.text("Today's goal"), findsOneWidget);
+      expect(find.text('Background sound'), findsOneWidget);
+      expect(find.text('Personal statistics (private)'), findsOneWidget);
     }
   });
 
@@ -200,23 +201,23 @@ void main() {
       find.byKey(const Key('study_focus_style_immersiveDock_landscape')),
       findsOneWidget,
     );
-    expect(find.text('极简自习室'), findsOneWidget);
-    expect(find.text('专注'), findsOneWidget);
-    expect(find.text('数据统计'), findsOneWidget);
-    expect(find.text('历史记录'), findsOneWidget);
-    expect(find.text('设置'), findsOneWidget);
-    expect(find.text('新建任务'), findsOneWidget);
-    expect(find.text('25 / 5 分钟'), findsOneWidget);
-    expect(find.text('50 / 10 分钟'), findsOneWidget);
-    expect(find.text('自定义时长'), findsOneWidget);
-    expect(find.text('结束当前轮次'), findsOneWidget);
-    expect(find.text('跳至休息'), findsOneWidget);
-    expect(find.text('静默陪伴'), findsOneWidget);
-    expect(find.text('在线 3 人'), findsOneWidget);
-    expect(find.text('白噪音'), findsOneWidget);
-    expect(find.text('今日数据 (私密)'), findsOneWidget);
+    expect(find.text('Minimal study room'), findsOneWidget);
+    expect(find.text('Focus'), findsOneWidget);
+    expect(find.text('Analytics'), findsOneWidget);
+    expect(find.text('History'), findsOneWidget);
+    expect(find.text('Settings'), findsOneWidget);
+    expect(find.text('New task'), findsOneWidget);
+    expect(find.text('25 / 5 min'), findsOneWidget);
+    expect(find.text('50 / 10 min'), findsOneWidget);
+    expect(find.text('Custom duration'), findsOneWidget);
+    expect(find.text('End current round'), findsOneWidget);
+    expect(find.text('Skip to break'), findsOneWidget);
+    expect(find.text('Silent companions'), findsOneWidget);
+    expect(find.text('3 online'), findsOneWidget);
+    expect(find.text('White noise'), findsWidgets);
+    expect(find.text("Today's data (private)"), findsOneWidget);
     expect(find.text('完成 SDK 文档编写'), findsOneWidget);
-    expect(find.textContaining('预计还需'), findsOneWidget);
+    expect(find.textContaining('remaining'), findsOneWidget);
 
     final sidebarSize = tester.getSize(
       find.byKey(const Key('study_focus_desktop_sidebar')),
@@ -256,10 +257,10 @@ void main() {
     expect(find.byKey(const Key('desktop_page_focus')), findsOneWidget);
 
     for (final section in const [
-      (label: '数据统计', value: StudyFocusDesktopSection.analytics),
-      (label: '历史记录', value: StudyFocusDesktopSection.history),
-      (label: '设置', value: StudyFocusDesktopSection.settings),
-      (label: '专注', value: StudyFocusDesktopSection.focus),
+      (label: 'Analytics', value: StudyFocusDesktopSection.analytics),
+      (label: 'History', value: StudyFocusDesktopSection.history),
+      (label: 'Settings', value: StudyFocusDesktopSection.settings),
+      (label: 'Focus', value: StudyFocusDesktopSection.focus),
     ]) {
       await tester.tap(find.text(section.label).first);
       await tester.pumpAndSettle();
@@ -284,7 +285,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.byKey(const Key('desktop_page_analytics')), findsOneWidget);
-    await tester.tap(find.text('历史记录').first);
+    await tester.tap(find.text('History').first);
     await tester.pumpAndSettle();
     expect(requested, StudyFocusDesktopSection.history);
     expect(find.byKey(const Key('desktop_page_analytics')), findsOneWidget);
@@ -332,7 +333,7 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    await tester.tap(find.text('新建任务').first);
+    await tester.tap(find.text('New task').first);
     await tester.pumpAndSettle();
     expect(find.text('Draft docs'), findsOneWidget);
 
@@ -356,7 +357,7 @@ void main() {
       find.descendant(of: taskTile, matching: find.byIcon(Icons.delete)),
     );
     await tester.pumpAndSettle();
-    await tester.tap(find.widgetWithText(FilledButton, '删除'));
+    await tester.tap(find.widgetWithText(FilledButton, 'Delete'));
     await tester.pumpAndSettle();
     expect(await store.loadTaskRecords(DateTime.now()), isEmpty);
   });
@@ -381,14 +382,14 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    await tester.tap(find.text('新建任务').first);
+    await tester.tap(find.text('New task').first);
     await tester.pumpAndSettle();
-    await tester.tap(find.widgetWithText(FilledButton, '保存'));
+    await tester.tap(find.widgetWithText(FilledButton, 'Save'));
     await tester.pump();
-    expect(find.text('任务名称不能为空'), findsOneWidget);
+    expect(find.text('Task name cannot be empty'), findsOneWidget);
 
     await tester.enterText(find.byKey(const Key('study_task_title')), 'Read');
-    await tester.tap(find.widgetWithText(FilledButton, '保存'));
+    await tester.tap(find.widgetWithText(FilledButton, 'Save'));
     await tester.pumpAndSettle();
     expect(find.text('Read'), findsOneWidget);
     expect((await store.loadTaskRecords(DateTime.now())).single.title, 'Read');
@@ -415,13 +416,13 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    expect(find.textContaining('番茄进度: 0/4'), findsOneWidget);
-    expect(find.text('0个'), findsOneWidget);
+    expect(find.textContaining('Pomodoro progress: 0/4'), findsOneWidget);
+    expect(find.text('0'), findsOneWidget);
 
     await store.addFocusSession(date, const Duration(minutes: 25));
     await tester.pumpAndSettle();
-    expect(find.textContaining('番茄进度: 1/4'), findsOneWidget);
-    expect(find.text('1个'), findsOneWidget);
+    expect(find.textContaining('Pomodoro progress: 1/4'), findsOneWidget);
+    expect(find.text('1'), findsOneWidget);
   });
 
   testWidgets(
@@ -442,16 +443,16 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
-      expect(find.textContaining('预计还需 100 分钟'), findsOneWidget);
+      expect(find.textContaining('About 100 min remaining'), findsOneWidget);
 
-      await tester.tap(find.text('50 / 10 分钟'));
+      await tester.tap(find.text('50 / 10 min'));
       await tester.pump();
       expect(find.text('50:00'), findsOneWidget);
-      expect(find.textContaining('预计还需 200 分钟'), findsOneWidget);
+      expect(find.textContaining('About 200 min remaining'), findsOneWidget);
 
       await tester.tap(find.byIcon(Icons.play_arrow).first);
       await tester.pump();
-      await tester.tap(find.text('25 / 5 分钟'));
+      await tester.tap(find.text('25 / 5 min'));
       await tester.pump();
       expect(find.text('50:00'), findsOneWidget);
       await tester.pumpWidget(const SizedBox.shrink());
@@ -522,6 +523,14 @@ void main() {
           currentUserId: 'user-1',
           localStorageNamespace: 'tenant-a',
           background: _testBackground,
+          backgroundOptions: [
+            ...StudyBackgroundOption.builtIns,
+            const StudyBackgroundOption(
+              id: 'custom-forest',
+              label: 'Custom forest',
+              background: StudyBackground.color(Colors.teal),
+            ),
+          ],
           soundPlayer: player,
         ),
       ),
@@ -529,7 +538,9 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(
-      tester.widget<ChoiceChip>(find.widgetWithText(ChoiceChip, '森林')).selected,
+      tester
+          .widget<ChoiceChip>(find.widgetWithText(ChoiceChip, 'Forest'))
+          .selected,
       isTrue,
     );
     expect(
@@ -538,6 +549,7 @@ void main() {
           .selected,
       isTrue,
     );
+    expect(find.text('Custom forest'), findsOneWidget);
     expect(
       tester
           .widget<Slider>(find.byKey(const Key('desktop_background_mask')))
@@ -670,6 +682,8 @@ void main() {
   testWidgets('MemberGrid renders names and presence labels', (tester) async {
     await tester.pumpWidget(
       MaterialApp(
+        localizationsDelegates: StudyRoomLocalizations.localizationsDelegates,
+        supportedLocales: StudyRoomLocalizations.supportedLocales,
         home: MemberGrid(
           members: const [
             StudyMember(
@@ -693,6 +707,8 @@ void main() {
 
     await tester.pumpWidget(
       MaterialApp(
+        localizationsDelegates: StudyRoomLocalizations.localizationsDelegates,
+        supportedLocales: StudyRoomLocalizations.supportedLocales,
         home: FocusTimer(
           elapsed: const Duration(minutes: 25),
           status: StudySessionStatus.running,
@@ -708,6 +724,8 @@ void main() {
 
     await tester.pumpWidget(
       MaterialApp(
+        localizationsDelegates: StudyRoomLocalizations.localizationsDelegates,
+        supportedLocales: StudyRoomLocalizations.supportedLocales,
         home: FocusTimer(
           elapsed: Duration.zero,
           status: StudySessionStatus.idle,
@@ -726,6 +744,8 @@ void main() {
 
     await tester.pumpWidget(
       MaterialApp(
+        localizationsDelegates: StudyRoomLocalizations.localizationsDelegates,
+        supportedLocales: StudyRoomLocalizations.supportedLocales,
         home: ChatPanel(
           messages: const [],
           onSend: (text) async {
@@ -791,15 +811,15 @@ void main() {
 
     await tester.tap(find.byIcon(Icons.bar_chart));
     await tester.pumpAndSettle();
-    expect(find.text('个人统计（私密）'), findsOneWidget);
+    expect(find.text('Personal statistics (private)'), findsOneWidget);
 
     await tester.tap(find.byIcon(Icons.music_note));
     await tester.pumpAndSettle();
-    expect(find.text('背景音'), findsOneWidget);
+    expect(find.text('Background sound'), findsOneWidget);
 
     await tester.tap(find.byIcon(Icons.group));
     await tester.pumpAndSettle();
-    expect(find.text('陪伴中'), findsOneWidget);
+    expect(find.text('Studying together'), findsOneWidget);
     expect(find.text('Kai'), findsOneWidget);
   });
 
@@ -867,20 +887,49 @@ void main() {
 
     await tester.tap(find.byIcon(Icons.play_arrow));
     await tester.pump();
-    expect(find.text('专注中'), findsOneWidget);
+    expect(find.text('Focusing'), findsOneWidget);
     await tester.tap(find.byIcon(Icons.pause));
     await tester.pump();
-    expect(find.text('已暂停'), findsOneWidget);
+    expect(find.text('Paused'), findsOneWidget);
     await tester.tap(find.byIcon(Icons.play_arrow));
     await tester.pump();
-    expect(find.text('专注中'), findsOneWidget);
+    expect(find.text('Focusing'), findsOneWidget);
 
-    await tester.tap(find.text('跳过'));
+    await tester.tap(find.text('Skip'));
     await tester.pump();
-    expect(find.text('休息中'), findsOneWidget);
+    expect(find.text('On a break'), findsOneWidget);
     expect(find.text('10:00'), findsOneWidget);
     expect((await store.loadDayRecord(DateTime.now())).pomodoroCount, 0);
     await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets('desktop clock supports deterministic internal injection', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1600, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        builder: (context, child) => MediaQuery(
+          data: MediaQuery.of(context).copyWith(alwaysUse24HourFormat: true),
+          child: child!,
+        ),
+        home: StudyFocusClockScope(
+          now: () => DateTime(2026, 8, 11, 9, 30),
+          child: StudyFocusKitView(
+            store: MemoryStudyStore(),
+            background: _testBackground,
+            soundPlayer: FakeSoundPlayer(),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('09:30'), findsOneWidget);
   });
 
   testWidgets('custom pomodoro preset validates and applies durations', (
@@ -901,7 +950,7 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    await tester.tap(find.text('自定义'));
+    await tester.tap(find.text('Custom'));
     await tester.pumpAndSettle();
 
     await tester.enterText(
@@ -909,7 +958,7 @@ void main() {
       '45',
     );
     await tester.enterText(find.byKey(const Key('pomodoro_custom_break')), '0');
-    await tester.tap(find.text('应用'));
+    await tester.tap(find.text('Apply'));
     await tester.pumpAndSettle();
 
     expect(find.text('45:00'), findsOneWidget);

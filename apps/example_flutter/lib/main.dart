@@ -4,21 +4,28 @@ import 'package:flutter/material.dart';
 import 'package:study_room_sdk/study_room_sdk.dart';
 import 'package:study_room_ui/study_room_ui.dart';
 
+import 'l10n/generated/study_room_example_localizations.dart';
+
 void main() {
   runApp(const StudyRoomExampleApp());
 }
 
 class StudyRoomExampleApp extends StatelessWidget {
-  const StudyRoomExampleApp({this.background, super.key});
+  const StudyRoomExampleApp({this.background, this.locale, super.key});
 
   final StudyBackground? background;
+  final Locale? locale;
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
       debugShowCheckedModeBanner: false,
-      localizationsDelegates: StudyRoomLocalizations.localizationsDelegates,
-      supportedLocales: StudyRoomLocalizations.supportedLocales,
+      locale: locale,
+      localizationsDelegates: [
+        StudyRoomExampleLocalizations.delegate,
+        ...StudyRoomLocalizations.localizationsDelegates,
+      ],
+      supportedLocales: StudyRoomExampleLocalizations.supportedLocales,
       theme: ThemeData(
         colorSchemeSeed: const Color(0xFF2563EB),
         useMaterial3: true,
@@ -43,6 +50,7 @@ class _StudyRoomExampleHomeState extends State<StudyRoomExampleHome> {
 
   @override
   Widget build(BuildContext context) {
+    final localizations = StudyRoomExampleLocalizations.of(context);
     return LayoutBuilder(
       builder: (context, constraints) {
         final desktopLandscape =
@@ -58,12 +66,12 @@ class _StudyRoomExampleHomeState extends State<StudyRoomExampleHome> {
               room: StudyRoom(
                 id: 'demo-room',
                 appId: 'demo-app',
-                title: 'Demo Focus Room',
+                title: localizations.demoRoomTitle,
                 version: 1,
                 members: [
                   StudyMember(
                     id: 'demo-user',
-                    displayName: 'You',
+                    displayName: localizations.currentUserName,
                     avatarUrl: '',
                     status: PresenceStatus.focusing,
                   ),
@@ -94,18 +102,18 @@ class _StudyRoomExampleHomeState extends State<StudyRoomExampleHome> {
                   child: SegmentedButton<StudyFocusVisualStyle>(
                     key: const Key('study_focus_style_switcher'),
                     style: _styleSwitcherStyle(),
-                    segments: const [
+                    segments: [
                       ButtonSegment(
                         value: StudyFocusVisualStyle.split,
-                        label: Text('Split'),
+                        label: Text(localizations.styleSplit),
                       ),
                       ButtonSegment(
                         value: StudyFocusVisualStyle.centered,
-                        label: Text('Centered'),
+                        label: Text(localizations.styleCentered),
                       ),
                       ButtonSegment(
                         value: StudyFocusVisualStyle.immersiveDock,
-                        label: Text('Immersive'),
+                        label: Text(localizations.styleImmersive),
                       ),
                     ],
                     selected: {_style},
@@ -123,10 +131,10 @@ class _StudyRoomExampleHomeState extends State<StudyRoomExampleHome> {
                   padding: const EdgeInsets.all(12),
                   child: Semantics(
                     button: true,
-                    label: 'Open live room workflow',
+                    label: localizations.openRoomWorkflow,
                     child: IconButton.filledTonal(
                       key: const Key('open_room_workflow'),
-                      tooltip: 'Rooms',
+                      tooltip: localizations.rooms,
                       onPressed: () => Navigator.of(context).push(
                         MaterialPageRoute<void>(
                           builder: (_) => const LiveStudyRoomManagementPage(),
@@ -230,23 +238,25 @@ class _LiveStudyRoomManagementPageState
 
   @override
   Widget build(BuildContext context) {
+    final localizations = StudyRoomExampleLocalizations.of(context);
     return Scaffold(
-      appBar: AppBar(title: const Text('Study Room 0.4 workflow')),
+      appBar: AppBar(title: Text(localizations.workflowTitle)),
       body: _sdk == null
-          ? const Padding(
-              padding: EdgeInsets.all(24),
-              child: SelectableText(
-                'Run with --dart-define=STUDY_ROOM_API_URL=http://localhost:3000 '
-                '--dart-define=STUDY_ROOM_REALTIME_URL=ws://localhost:3000/v1/realtime '
-                '--dart-define=STUDY_ROOM_TOKEN=<jwt> '
-                '--dart-define=STUDY_ROOM_TOKEN_EXPIRES_AT=<unix-seconds>.',
-              ),
+          ? Padding(
+              padding: const EdgeInsets.all(24),
+              child: SelectableText(localizations.configurationInstructions),
             )
           : FutureBuilder<void>(
               future: _started,
               builder: (context, snapshot) {
                 if (snapshot.hasError) {
-                  return Center(child: SelectableText('${snapshot.error}'));
+                  debugPrint(
+                    'Study room example startup failed: ${snapshot.error}\n'
+                    '${snapshot.stackTrace}',
+                  );
+                  return Center(
+                    child: SelectableText(localizations.startupFailed),
+                  );
                 }
                 if (snapshot.connectionState != ConnectionState.done) {
                   return const Center(child: CircularProgressIndicator());
@@ -282,15 +292,16 @@ class _RoomAdministrationPage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final localizations = StudyRoomExampleLocalizations.of(context);
     return DefaultTabController(
       length: 2,
       child: Scaffold(
         appBar: AppBar(
           title: Text(room.title),
-          bottom: const TabBar(
+          bottom: TabBar(
             tabs: [
-              Tab(text: 'Members'),
-              Tab(text: 'Requests'),
+              Tab(text: localizations.membersTab),
+              Tab(text: localizations.requestsTab),
             ],
           ),
         ),

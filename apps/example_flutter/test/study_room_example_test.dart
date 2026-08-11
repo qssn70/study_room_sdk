@@ -76,4 +76,19 @@ void main() {
     expect(switcher.style?.backgroundColor?.resolve({}), isNotNull);
     expect(switcher.style?.foregroundColor?.resolve({}), isNotNull);
   });
+
+  testWidgets('example shell follows the platform locale', (tester) async {
+    await tester.pumpWidget(
+      const StudyRoomExampleApp(
+        background: _testBackground,
+        locale: Locale('zh'),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('分栏'), findsOneWidget);
+    expect(find.text('居中'), findsOneWidget);
+    expect(find.text('沉浸'), findsOneWidget);
+    expect(find.byTooltip('房间'), findsOneWidget);
+  });
 }
