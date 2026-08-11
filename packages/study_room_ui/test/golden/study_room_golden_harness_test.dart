@@ -190,7 +190,7 @@ StudyRoomSdk _goldenSdk() => StudyRoomSdk(
     realtimeUri: Uri.parse('wss://example.com/v1/realtime'),
     tokenProvider: (_) async => StudyRoomAccessToken(
       value: 'golden-token',
-      expiresAt: _fixedDate.add(const Duration(hours: 1)),
+      expiresAt: DateTime.utc(2100),
     ),
     transport: _GoldenTransport(),
     realtimeConnector: _UnusedRealtimeConnector(),
