@@ -5,6 +5,12 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+    inputs:
+      update_goldens:
+        description: Generate the eight Ubuntu Golden baselines for review
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -121,11 +127,56 @@ jobs:
           flutter-version: '3.44.1'
           cache: true
       - run: flutter pub get
+      - name: Generate Ubuntu Golden baselines
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.update_goldens }}
+        working-directory: packages/study_room_ui
+        run: flutter test --no-pub --dart-define=STUDY_ROOM_RUN_GOLDENS=true --update-goldens test/golden/study_room_golden_harness_test.dart
+      - name: Validate the Golden baseline set
+        shell: bash
+        working-directory: packages/study_room_ui
+        run: |
+          set -euo pipefail
+          baseline_dir='test/golden/baselines'
+          expected=(
+            analytics_desktop.png
+            focus_compact_landscape.png
+            focus_desktop.png
+            focus_portrait_centered.png
+            focus_portrait_immersive.png
+            focus_portrait_split.png
+            history_desktop.png
+            room_management.png
+          )
+
+          if [[ ! -d "$baseline_dir" ]]; then
+            echo "::error::Golden baseline directory is missing: $baseline_dir"
+            exit 1
+          fi
+
+          mapfile -t actual < <(
+            find "$baseline_dir" -maxdepth 1 -type f -name '*.png' -printf '%f\n' | sort
+          )
+          if [[ ${#actual[@]} -ne ${#expected[@]} ]] || \
+             ! diff -u <(printf '%s\n' "${expected[@]}") <(printf '%s\n' "${actual[@]}"); then
+            echo "::error::Expected exactly the eight declared Ubuntu Golden PNGs"
+            printf 'Found: %s\n' "${actual[*]:-none}"
+            exit 1
+          fi
       - name: Run UI tests including Golden comparisons
         working-directory: packages/study_room_ui
         run: flutter test --no-pub --dart-define=STUDY_ROOM_RUN_GOLDENS=true test/golden/study_room_golden_harness_test.dart
+      - name: Upload generated Ubuntu Golden baselines
+        if: ${{ always() && github.event_name == 'workflow_dispatch' && inputs.update_goldens }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: golden-baselines-${{ github.sha }}
+          path: |
+            packages/study_room_ui/test/golden/baselines/**
+            packages/study_room_ui/test/failures/**
+          if-no-files-found: warn
+          retention-days: 14
       - name: Upload Golden expected, actual, and diff images
-        if: failure()
+        if: ${{ failure() && (github.event_name != 'workflow_dispatch' || inputs.update_goldens != true) }}
         uses: actions/upload-artifact@v4
         with:
           name: golden-failure-${{ github.sha }}

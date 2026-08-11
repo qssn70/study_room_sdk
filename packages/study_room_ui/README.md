@@ -26,20 +26,31 @@ The package ships Simplified Chinese and English resources and follows the host 
 ## Golden tests
 
 The eight-scenario Golden harness is skipped by default for local portability.
-Ubuntu CI must enable it explicitly; missing baselines or visual differences then
-fail the run:
+Ubuntu CI enables it explicitly; missing baselines, unexpected baseline files,
+or visual differences fail the run:
 
 ```sh
 flutter test test/golden/study_room_golden_harness_test.dart \
   --dart-define=STUDY_ROOM_RUN_GOLDENS=true
 ```
 
-Create or deliberately update baselines only on Ubuntu with the CI-pinned
-Flutter 3.44.1 toolchain:
+Create or deliberately update baselines only through the repository's **CI**
+workflow so they use the pinned Ubuntu and Flutter 3.44.1 environment:
 
-```sh
-flutter test test/golden/study_room_golden_harness_test.dart \
-  --dart-define=STUDY_ROOM_RUN_GOLDENS=true --update-goldens
-```
+1. Open the **CI** workflow in GitHub Actions and choose **Run workflow** for the
+   commit that needs baselines.
+2. Enable **Generate the eight Ubuntu Golden baselines for review** and start
+   the run.
+3. Download the `golden-baselines-<commit SHA>` artifact. The generation job
+   verifies that all eight expected PNGs exist and immediately runs the normal
+   comparison test against them.
+4. Review every image for clipping, overlap, blank output, font anomalies, and
+   unintended visual changes. Then place only the approved PNGs in
+   `test/golden/baselines/` and commit them.
+
+Pull requests, pushes to `main`, and manual runs without that option are always
+comparison-only and never update accepted images. Failed comparison runs upload
+a `golden-failure-<commit SHA>` artifact containing expected, actual, and diff
+images for diagnosis.
 
 Licensed under Apache-2.0.
