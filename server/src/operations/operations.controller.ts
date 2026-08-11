@@ -3,6 +3,7 @@ import { AdminScope, Public } from '../auth/auth.decorators';
 import { PrismaService } from '../prisma/prisma.service';
 import { RedisService } from '../redis/redis.service';
 import { MetricsService } from './metrics.service';
+import { SkipRateLimit } from '../common/rate-limit.decorators';
 
 @Controller()
 export class OperationsController {
@@ -13,12 +14,14 @@ export class OperationsController {
   ) {}
 
   @Public()
+  @SkipRateLimit()
   @Get('health/live')
   live() {
     return { status: 'ok' };
   }
 
   @Public()
+  @SkipRateLimit()
   @Get('health/ready')
   async ready() {
     try {

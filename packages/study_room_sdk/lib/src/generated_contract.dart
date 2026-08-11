@@ -16,6 +16,8 @@ Map<String, Object?> _wireObject(Object? value) => Map<String, Object?>.from(val
 
 typedef AppIdWire = String;
 
+typedef UserIdWire = String;
+
 enum PresenceStatusWire { online, focusing, idle, away, offline }
 
 enum RoomRoleWire { owner, member }
@@ -179,14 +181,14 @@ final class MemberWire {
     required this.status
   });
 
-  final String id;
+  final UserIdWire id;
   final String displayName;
   final String avatarUrl;
   final RoomRoleWire role;
   final PresenceStatusWire status;
 
   factory MemberWire.fromJson(Map<String, Object?> json) => MemberWire(
-      id: json["id"] as String,
+      id: json["id"] as UserIdWire,
       displayName: json["displayName"] as String,
       avatarUrl: json["avatarUrl"] as String,
       role: RoomRoleWire.values.byName(json["role"] as String),
@@ -267,7 +269,7 @@ final class JoinRequestWire {
 
   final String id;
   final String roomId;
-  final String userId;
+  final UserIdWire userId;
   final String displayName;
   final JoinRequestStatusWire status;
   final String createdAt;
@@ -276,7 +278,7 @@ final class JoinRequestWire {
   factory JoinRequestWire.fromJson(Map<String, Object?> json) => JoinRequestWire(
       id: json["id"] as String,
       roomId: json["roomId"] as String,
-      userId: json["userId"] as String,
+      userId: json["userId"] as UserIdWire,
       displayName: json["displayName"] as String,
       status: JoinRequestStatusWire.values.byName(json["status"] as String),
       createdAt: json["createdAt"] as String,
@@ -326,7 +328,7 @@ final class ChatMessageWire {
 
   final String id;
   final String roomId;
-  final String senderId;
+  final UserIdWire senderId;
   final String senderName;
   final String text;
   final String sentAt;
@@ -334,7 +336,7 @@ final class ChatMessageWire {
   factory ChatMessageWire.fromJson(Map<String, Object?> json) => ChatMessageWire(
       id: json["id"] as String,
       roomId: json["roomId"] as String,
-      senderId: json["senderId"] as String,
+      senderId: json["senderId"] as UserIdWire,
       senderName: json["senderName"] as String,
       text: json["text"] as String,
       sentAt: json["sentAt"] as String,
@@ -383,7 +385,7 @@ final class StudySessionWire {
 
   final String id;
   final String roomId;
-  final String userId;
+  final UserIdWire userId;
   final SessionStatusWire status;
   final String startedAt;
   final String? finishedAt;
@@ -392,7 +394,7 @@ final class StudySessionWire {
   factory StudySessionWire.fromJson(Map<String, Object?> json) => StudySessionWire(
       id: json["id"] as String,
       roomId: json["roomId"] as String,
-      userId: json["userId"] as String,
+      userId: json["userId"] as UserIdWire,
       status: SessionStatusWire.values.byName(json["status"] as String),
       startedAt: json["startedAt"] as String,
       finishedAt: json["finishedAt"] == null ? null : json["finishedAt"] as String,
@@ -467,10 +469,10 @@ final class TransferOwnershipRequestWire {
     required this.userId
   });
 
-  final String userId;
+  final UserIdWire userId;
 
   factory TransferOwnershipRequestWire.fromJson(Map<String, Object?> json) => TransferOwnershipRequestWire(
-      userId: json["userId"] as String,
+      userId: json["userId"] as UserIdWire,
     );
 
   Map<String, Object?> toJson() => <String, Object?>{

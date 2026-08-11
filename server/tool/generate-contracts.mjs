@@ -7,6 +7,7 @@ const root = resolve(import.meta.dirname, '..', '..');
 const openapiPath = resolve(root, 'contracts', 'openapi.yaml');
 const realtimePath = resolve(root, 'contracts', 'realtime-events.schema.json');
 const tsPath = resolve(root, 'server', 'src', 'generated', 'contract-types.ts');
+const requestDtoPath = resolve(root, 'server', 'src', 'generated', 'request-dtos.ts');
 const dartPath = resolve(root, 'packages', 'study_room_sdk', 'lib', 'src', 'generated_contract.dart');
 const openapi = load(await readFile(openapiPath, 'utf8'));
 const realtime = JSON.parse(await readFile(realtimePath, 'utf8'));
@@ -19,6 +20,202 @@ const primaryType = (schema = {}) => Array.isArray(schema.type)
   : schema.type;
 const isEnum = (schema = {}) => primaryType(schema) === 'string' && Array.isArray(schema.enum);
 const isObject = (schema = {}) => primaryType(schema) === 'object' && schema.properties;
+
+function resolvedRequestSchema(schema = {}) {
+  if (!schema.$ref) return schema;
+  const resolved = schemas[refName(schema.$ref)];
+  if (!resolved) throw new Error(`Unknown request schema reference: ${schema.$ref}`);
+  const { $ref: _ref, ...overrides } = schema;
+  return { ...resolved, ...overrides };
+}
+
+function requestType(schema = {}) {
+  const resolved = resolvedRequestSchema(schema);
+  const type = primaryType(resolved);
+  let value;
+  if (isEnum(resolved)) value = resolved.enum.map((entry) => JSON.stringify(entry)).join(' | ');
+  else if (type === 'string') value = 'string';
+  else if (type === 'integer' || type === 'number') value = 'number';
+  else if (type === 'boolean') value = 'boolean';
+  else if (type === 'array') value = `Array<${requestType(resolved.items ?? {})}>`;
+  else value = 'unknown';
+  return nullable(resolved) ? `${value} | null` : value;
+}
+
+const requestValidatorImports = new Set();
+let requestUsesTypeTransform = false;
+let requestUsesMinProperties = false;
+
+function validator(name) {
+  requestValidatorImports.add(name);
+  return name;
+}
+
+function requestDecorators(schema = {}, { required, convertInteger }) {
+  const resolved = resolvedRequestSchema(schema);
+  const type = primaryType(resolved);
+  const decorators = [];
+  if (required) {
+    decorators.push(`@${validator('IsDefined')}()`);
+    if (nullable(resolved)) {
+      decorators.push(`@${validator('ValidateIf')}((_object, value) => value !== null)`);
+    }
+  } else if (nullable(resolved)) {
+    decorators.push(`@${validator('IsOptional')}()`);
+  } else {
+    decorators.push(`@${validator('ValidateIf')}((_object, value) => value !== undefined)`);
+  }
+  if (convertInteger && type === 'integer') {
+    requestUsesTypeTransform = true;
+    decorators.push('@Type(() => Number)');
+  }
+  if (type === 'string') {
+    decorators.push(`@${validator('IsString')}()`);
+    if (resolved.format === 'uuid') decorators.push(`@${validator('IsUUID')}()`);
+    if (resolved.format === 'uri') {
+      decorators.push(`@${validator('IsUrl')}({ require_protocol: true, require_tld: false })`);
+    }
+    if (isEnum(resolved)) decorators.push(`@${validator('IsIn')}(${JSON.stringify(resolved.enum)})`);
+    if (resolved.minLength !== undefined) decorators.push(`@${validator('MinLength')}(${resolved.minLength})`);
+    if (resolved.maxLength !== undefined) decorators.push(`@${validator('MaxLength')}(${resolved.maxLength})`);
+    if (resolved.pattern !== undefined) {
+      decorators.push(`@${validator('Matches')}(new RegExp(${JSON.stringify(resolved.pattern)}))`);
+    }
+  } else if (type === 'integer') {
+    decorators.push(`@${validator('IsInt')}()`);
+    if (resolved.minimum !== undefined) decorators.push(`@${validator('Min')}(${resolved.minimum})`);
+    if (resolved.maximum !== undefined) decorators.push(`@${validator('Max')}(${resolved.maximum})`);
+  } else if (type === 'number') {
+    decorators.push(`@${validator('IsNumber')}()`);
+    if (resolved.minimum !== undefined) decorators.push(`@${validator('Min')}(${resolved.minimum})`);
+    if (resolved.maximum !== undefined) decorators.push(`@${validator('Max')}(${resolved.maximum})`);
+  } else if (type === 'boolean') {
+    decorators.push(`@${validator('IsBoolean')}()`);
+  } else if (type === 'array') {
+    decorators.push(`@${validator('IsArray')}()`);
+  }
+  return decorators;
+}
+
+function requestProperty(name, schema, { required, convertInteger }) {
+  const resolved = resolvedRequestSchema(schema);
+  const decorators = requestDecorators(resolved, { required, convertInteger }).map((entry) => `  ${entry}`).join('\n');
+  const defaultValue = resolved.default;
+  const declaration = defaultValue !== undefined
+    ? `${name}${required ? '' : '?'}: ${requestType(resolved)} = ${JSON.stringify(defaultValue)};`
+    : required ? `${name}!: ${requestType(resolved)};` : `${name}?: ${requestType(resolved)};`;
+  return `${decorators}\n  ${declaration}`;
+}
+
+function requestClass(name, properties, { minProperties = 0, convertInteger = false } = {}) {
+  const fields = properties.map(({ name: propertyName, schema, required }) =>
+    requestProperty(propertyName, schema, { required, convertInteger })).join('\n\n');
+  let minimum = '';
+  if (minProperties > 0) {
+    requestUsesMinProperties = true;
+    validator('Validate');
+    validator('ValidationArguments');
+    validator('ValidatorConstraint');
+    validator('ValidatorConstraintInterface');
+    const names = properties.map(({ name: propertyName }) => propertyName);
+    minimum = `\n\nValidate(MinimumDefinedPropertiesConstraint, ` +
+      `[${minProperties}, ${JSON.stringify(names)}])` +
+      `(${name}.prototype, '__minimumDefinedProperties');`;
+  }
+  return `export class ${name} {\n${fields}\n}${minimum}`;
+}
+
+function dereferenceParameter(parameter = {}) {
+  if (!parameter.$ref) return parameter;
+  const name = refName(parameter.$ref);
+  const resolved = openapi.components?.parameters?.[name];
+  if (!resolved) throw new Error(`Unknown parameter reference: ${parameter.$ref}`);
+  return resolved;
+}
+
+function mergedParameters(pathItem, operation) {
+  const merged = new Map();
+  for (const candidate of [...(pathItem.parameters ?? []), ...(operation.parameters ?? [])]) {
+    const parameter = dereferenceParameter(candidate);
+    if (!['path', 'query'].includes(parameter.in)) continue;
+    merged.set(`${parameter.in}:${parameter.name}`, parameter);
+  }
+  return [...merged.values()];
+}
+
+function requestSchemaFromBody(operation) {
+  const body = operation.requestBody;
+  if (!body) return undefined;
+  if (body.$ref) throw new Error(`Request body references are not yet supported: ${body.$ref}`);
+  return body.content?.['application/json']?.schema;
+}
+
+function operationClassPrefix(operationId) {
+  return `${operationId.charAt(0).toUpperCase()}${operationId.slice(1)}`;
+}
+
+const requestClasses = [];
+const httpMethods = new Set(['get', 'post', 'put', 'patch', 'delete', 'options', 'head', 'trace']);
+for (const pathItem of Object.values(openapi.paths ?? {})) {
+  for (const [method, operation] of Object.entries(pathItem)) {
+    if (!httpMethods.has(method)) continue;
+    const prefix = operationClassPrefix(operation.operationId);
+    const parameters = mergedParameters(pathItem, operation);
+    for (const location of ['params', 'query']) {
+      const openapiLocation = location === 'params' ? 'path' : 'query';
+      const selected = parameters
+        .filter((parameter) => parameter.in === openapiLocation)
+        .map((parameter) => ({
+          name: parameter.name,
+          schema: parameter.schema ?? {},
+          required: openapiLocation === 'path' || parameter.required === true,
+        }));
+      if (selected.length > 0) {
+        requestClasses.push(requestClass(
+          `${prefix}${location === 'params' ? 'Params' : 'Query'}Dto`,
+          selected,
+          { convertInteger: openapiLocation === 'query' },
+        ));
+      }
+    }
+    const bodySchema = requestSchemaFromBody(operation);
+    if (bodySchema) {
+      const resolved = resolvedRequestSchema(bodySchema);
+      if (!isObject(resolved)) throw new Error(`Request body for ${operation.operationId} must be an object schema`);
+      const required = new Set(resolved.required ?? []);
+      const properties = Object.entries(resolved.properties ?? {}).map(([name, schema]) => ({
+        name,
+        schema,
+        required: required.has(name),
+      }));
+      requestClasses.push(requestClass(
+        `${prefix}BodyDto`,
+        properties,
+        { minProperties: resolved.minProperties ?? 0 },
+      ));
+    }
+  }
+}
+
+const requestValidatorImport = [...requestValidatorImports].sort().join(', ');
+const minimumDefinedProperties = requestUsesMinProperties
+  ? `\n@ValidatorConstraint({ name: 'minimumDefinedProperties', async: false })\n` +
+    `class MinimumDefinedPropertiesConstraint implements ValidatorConstraintInterface {\n` +
+    `  validate(_value: unknown, arguments_: ValidationArguments) {\n` +
+    `    const [minimum, names] = arguments_.constraints as [number, readonly string[]];\n` +
+    `    const object = arguments_.object as Record<string, unknown>;\n` +
+    `    return !Object.prototype.hasOwnProperty.call(object, arguments_.property)\n` +
+    `      && names.filter((name) => object[name] !== undefined).length >= minimum;\n` +
+    `  }\n\n` +
+    `  defaultMessage(arguments_: ValidationArguments) {\n` +
+    `    return \`Request body must define at least \${arguments_.constraints[0]} property\`;\n` +
+    `  }\n` +
+    `}\n`
+  : '';
+const requestDtos = `// GENERATED FILE. Run npm run generate:contracts; do not edit.\n` +
+  (requestUsesTypeTransform ? `import { Type } from 'class-transformer';\n` : '') +
+  `import { ${requestValidatorImport} } from 'class-validator';\n` +
+  `${minimumDefinedProperties}\n${requestClasses.join('\n\n')}\n`;
 
 function dartBaseType(schema = {}) {
   if (schema.$ref) return `${refName(schema.$ref)}Wire`;
@@ -259,5 +456,5 @@ async function output(path, expected) {
   }
 }
 
-await Promise.all([output(tsPath, ts), output(dartPath, dart)]);
+await Promise.all([output(tsPath, ts), output(requestDtoPath, requestDtos), output(dartPath, dart)]);
 console.log(process.argv.includes('--check') ? 'Generated contracts are current.' : 'Generated contract types.');

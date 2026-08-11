@@ -72,7 +72,7 @@ describe('RoomsService room and membership workflows', () => {
     const service = new RoomsService(prisma as never, presence as never);
     await expect(service.isMember('room-1', identity)).resolves.toBe(false);
     await expect(service.requestJoin('room-1', { ...identity, userId: 'user-2' }))
-      .resolves.toMatchObject({ status: 'pending' });
+      .resolves.toMatchObject({ request: { status: 'pending' }, created: true });
     prisma.roomMembership.count.mockResolvedValueOnce(1);
     await expect(service.requestJoin('room-1', identity)).rejects.toBeInstanceOf(ConflictException);
     prisma.room.findFirst.mockResolvedValueOnce(null as never);
@@ -87,14 +87,15 @@ describe('RoomsService room and membership workflows', () => {
       room: { findFirst: jest.fn(async () => ({ id: 'room-1' })) },
       roomMembership: { count: jest.fn(async () => 0) },
       joinRequest: {
-        findFirst: jest.fn(async () => null),
+        findFirst: jest.fn()
+          .mockResolvedValueOnce(null)
+          .mockResolvedValueOnce(request),
         create: jest.fn(async () => { throw duplicate; }),
-        findFirstOrThrow: jest.fn(async () => request),
       },
     };
     const service = new RoomsService(prisma as never, presence as never);
     await expect(service.requestJoin('room-1', { ...identity, userId: 'user-2' }))
-      .resolves.toMatchObject({ id: 'request-1' });
+      .resolves.toMatchObject({ request: { id: 'request-1' }, created: false });
   });
 
   it('lists and cancels personal and owner requests', async () => {

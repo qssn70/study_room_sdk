@@ -71,6 +71,37 @@ try {
   await ack(ownerSocket, 'room.subscribe', { roomId: room.id });
   await ack(memberSocket, 'room.subscribe', { roomId: room.id });
 
+  const duplicateApplicantId = `flow-duplicate-${runId}`;
+  const duplicateApplicantToken = await token({
+    sub: duplicateApplicantId,
+    displayName: 'Duplicate Applicant',
+  });
+  const createdRequestEvent = nextEvent(
+    ownerSocket,
+    (event) => event.type === 'join-request.created'
+      && event.payload?.userId === duplicateApplicantId,
+  );
+  const firstDuplicateRequest = await request(
+    api1,
+    duplicateApplicantToken,
+    'POST',
+    `/v1/rooms/${room.id}/join-requests`,
+  );
+  await createdRequestEvent;
+  const duplicateEventGuard = expectNoEvent(
+    ownerSocket,
+    (event) => event.type === 'join-request.created'
+      && event.payload?.userId === duplicateApplicantId,
+  );
+  const repeatedRequest = await request(
+    api2,
+    duplicateApplicantToken,
+    'POST',
+    `/v1/rooms/${room.id}/join-requests`,
+  );
+  assert(repeatedRequest.id === firstDuplicateRequest.id, 'Repeated join request returned a different request');
+  await duplicateEventGuard;
+
   const chatText = `cross-instance-${runId}`;
   const chatEvent = nextEvent(
     memberSocket,

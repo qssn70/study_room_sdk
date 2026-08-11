@@ -33,8 +33,8 @@ describe('RoomsService approval invariants', () => {
     };
     const service = new RoomsService(prisma as never, {} as never);
     await expect(service.requestJoin('room-1', { ...identity, userId: 'user-2' })).resolves.toMatchObject({
-      id: 'request-1',
-      status: 'pending',
+      request: { id: 'request-1', status: 'pending' },
+      created: false,
     });
     expect(prisma.joinRequest.create).not.toHaveBeenCalled();
   });

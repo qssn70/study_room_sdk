@@ -1,10 +1,16 @@
-import { Body, Controller, Get, Param, ParseUUIDPipe, Patch, Post, Query } from '@nestjs/common';
+import { Body, Controller, Get, Param, Patch, Post, Query } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { CurrentIdentity } from '../auth/current-identity.decorator';
 import { ExternalIdentity } from '../domain';
+import {
+  ListActiveSessionsParamsDto,
+  ListActiveSessionsQueryDto,
+  StartSessionParamsDto,
+  UpdateSessionBodyDto,
+  UpdateSessionParamsDto,
+} from '../generated/request-dtos';
 import { RealtimePublisher } from '../realtime/realtime.publisher';
 import { RoomsService } from '../rooms/rooms.service';
-import { SessionPageQueryDto, UpdateSessionDto } from './sessions.dto';
 import { SessionsService } from './sessions.service';
 
 @ApiTags('sessions')
@@ -18,29 +24,29 @@ export class SessionsController {
   ) {}
 
   @Post('rooms/:roomId/sessions')
-  async start(@Param('roomId', new ParseUUIDPipe({ version: '4' })) roomId: string, @CurrentIdentity() identity: ExternalIdentity) {
-    const session = await this.sessions.start(roomId, identity);
-    this.realtime.publishRoom(identity.appId, roomId, 'session.updated', session, null);
-    await this.publishPresence(identity, roomId);
+  async start(@Param() params: StartSessionParamsDto, @CurrentIdentity() identity: ExternalIdentity) {
+    const session = await this.sessions.start(params.roomId, identity);
+    this.realtime.publishRoom(identity.appId, params.roomId, 'session.updated', session, null);
+    await this.publishPresence(identity, params.roomId);
     return session;
   }
 
   @Get('rooms/:roomId/active-sessions')
   listActive(
-    @Param('roomId', new ParseUUIDPipe({ version: '4' })) roomId: string,
+    @Param() params: ListActiveSessionsParamsDto,
     @CurrentIdentity() identity: ExternalIdentity,
-    @Query() query: SessionPageQueryDto,
+    @Query() query: ListActiveSessionsQueryDto,
   ) {
-    return this.sessions.listActive(roomId, identity, query.cursor, query.limit);
+    return this.sessions.listActive(params.roomId, identity, query.cursor, query.limit);
   }
 
   @Patch('sessions/:sessionId')
   async update(
-    @Param('sessionId', new ParseUUIDPipe({ version: '4' })) sessionId: string,
-    @Body() body: UpdateSessionDto,
+    @Param() params: UpdateSessionParamsDto,
+    @Body() body: UpdateSessionBodyDto,
     @CurrentIdentity() identity: ExternalIdentity,
   ) {
-    const session = await this.sessions.update(sessionId, body.status, identity);
+    const session = await this.sessions.update(params.sessionId, body.status, identity);
     this.realtime.publishRoom(identity.appId, session.roomId, 'session.updated', session, null);
     await this.publishPresence(identity, session.roomId);
     return session;

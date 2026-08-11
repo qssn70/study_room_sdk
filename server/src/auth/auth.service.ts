@@ -1,18 +1,30 @@
-import { Injectable, UnauthorizedException } from '@nestjs/common';
+import { Injectable, OnModuleInit, UnauthorizedException } from '@nestjs/common';
 import jwt, { JwtHeader, JwtPayload } from 'jsonwebtoken';
 import jwksClient, { JwksClient } from 'jwks-rsa';
 import { ApplicationsService } from '../applications/applications.service';
+import { JwksUriPolicy } from '../applications/jwks-uri.policy';
 import { AdminIdentity, ExternalIdentity } from '../domain';
 import { PrismaService } from '../prisma/prisma.service';
 
 @Injectable()
-export class AuthService {
+export class AuthService implements OnModuleInit {
   private readonly clients = new Map<string, JwksClient>();
 
   constructor(
     private readonly applications: ApplicationsService,
     private readonly prisma: PrismaService,
+    private readonly jwksUriPolicy: JwksUriPolicy,
   ) {}
+
+  onModuleInit() {
+    this.jwksUriPolicy.assertAllowed(
+      this.requiredEnv('STUDY_ROOM_ADMIN_JWKS_URL'),
+      'Administrator JWKS URI',
+    );
+    this.requiredEnv('STUDY_ROOM_ADMIN_JWT_ISSUER');
+    this.requiredEnv('STUDY_ROOM_ADMIN_JWT_AUDIENCE');
+    this.jwksCacheMs();
+  }
 
   async verifyBearer(authorization?: string): Promise<ExternalIdentity> {
     return this.verifyUserToken(this.bearerToken(authorization));
@@ -56,7 +68,7 @@ export class AuthService {
     );
     const { sub, appId, displayName, avatarUrl, exp } = payload;
     if (
-      typeof sub !== 'string' || sub.trim().length === 0 ||
+      typeof sub !== 'string' || sub.trim().length === 0 || sub.trim().length > 256 ||
       appId !== application.appId ||
       typeof displayName !== 'string' || displayName.trim().length === 0 ||
       typeof exp !== 'number' ||
@@ -111,6 +123,7 @@ export class AuthService {
   }
 
   private client(uri: string) {
+    this.jwksUriPolicy.assertAllowed(uri);
     let client = this.clients.get(uri);
     if (!client) {
       client = jwksClient({

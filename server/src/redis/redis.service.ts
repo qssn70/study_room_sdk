@@ -8,16 +8,20 @@ type MessageHandler = (message: string) => void | Promise<void>;
 export class RedisService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(RedisService.name);
   private readonly url = process.env.REDIS_URL ?? 'redis://localhost:6379';
-  readonly client: RedisClientType = createClient({ url: this.url });
-  readonly publisher: RedisClientType = createClient({ url: this.url });
-  readonly adapterSubscriber: RedisClientType = createClient({ url: this.url });
-  private readonly subscriber: RedisClientType = createClient({ url: this.url });
+  readonly client: RedisClientType = this.createClient();
+  readonly publisher: RedisClientType = this.createClient();
+  readonly adapterSubscriber: RedisClientType = this.createClient();
+  private readonly subscriber: RedisClientType = this.createClient();
   private readonly handlers = new Map<string, Set<MessageHandler>>();
 
   constructor() {
     for (const client of [this.client, this.publisher, this.adapterSubscriber, this.subscriber]) {
       client.on('error', (error) => this.logger.error(error.message));
     }
+  }
+
+  private createClient(): RedisClientType {
+    return createClient({ url: this.url, disableOfflineQueue: true });
   }
 
   async onModuleInit() {

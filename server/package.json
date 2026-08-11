@@ -35,7 +35,6 @@
     "@nestjs/platform-socket.io": "^11.1.27",
     "@nestjs/schedule": "^6.0.0",
     "@nestjs/swagger": "^11.4.4",
-    "@nestjs/throttler": "^6.4.0",
     "@nestjs/websockets": "^11.1.27",
     "@opentelemetry/auto-instrumentations-node": "^0.79.0",
     "@opentelemetry/exporter-trace-otlp-http": "^0.221.0",

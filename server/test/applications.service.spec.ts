@@ -1,6 +1,7 @@
 import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { APPLICATION_CHANGE_CHANNEL, ApplicationsService } from '../src/applications/applications.service';
+import { JwksUriPolicy } from '../src/applications/jwks-uri.policy';
 
 const app = {
   appId: 'app-1', issuer: 'https://issuer.example', audience: 'api',
@@ -19,6 +20,7 @@ describe('ApplicationsService registry and invalidation', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     redis.handler = undefined;
+    delete process.env.STUDY_ROOM_RUNTIME_PROFILE;
     delete process.env.STUDY_ROOM_ALLOW_INSECURE_JWKS;
   });
 
@@ -29,9 +31,9 @@ describe('ApplicationsService registry and invalidation', () => {
     };
     const prisma = {
       $transaction: jest.fn(async (callback) => callback(tx)),
-      application: { findUnique: jest.fn(async () => app) },
+      application: { findMany: jest.fn(async () => []), findUnique: jest.fn(async () => app) },
     };
-    const service = new ApplicationsService(prisma as never, redis as never);
+    const service = new ApplicationsService(prisma as never, redis as never, new JwksUriPolicy());
     await service.onModuleInit();
     await expect(service.create({
       appId: app.appId, issuer: app.issuer, audience: app.audience, jwksUri: app.jwksUri,
@@ -56,7 +58,7 @@ describe('ApplicationsService registry and invalidation', () => {
         findMany: jest.fn(async () => [app, { ...app, appId: 'app-2' }, { ...app, appId: 'app-3' }]),
       },
     };
-    const service = new ApplicationsService(prisma as never, redis as never);
+    const service = new ApplicationsService(prisma as never, redis as never, new JwksUriPolicy());
     await expect(service.update('app-1', { enabled: false }, 'admin')).resolves.toMatchObject({ enabled: false });
     await expect(service.list('cursor', 2)).resolves.toMatchObject({
       items: [{ appId: 'app-1' }, { appId: 'app-2' }], nextCursor: 'app-2',
@@ -74,7 +76,7 @@ describe('ApplicationsService registry and invalidation', () => {
       .fn()
       .mockResolvedValueOnce(null)
       .mockResolvedValueOnce({ ...app, enabled: false }) } };
-    const service = new ApplicationsService(prisma as never, redis as never);
+    const service = new ApplicationsService(prisma as never, redis as never, new JwksUriPolicy());
     await expect(service.get('missing')).rejects.toBeInstanceOf(NotFoundException);
     await expect(service.getEnabled('app-1')).rejects.toBeInstanceOf(NotFoundException);
     await expect(service.create({
@@ -83,6 +85,7 @@ describe('ApplicationsService registry and invalidation', () => {
   });
 
   it('allows explicitly opted-in local JWKS and returns a final page', async () => {
+    process.env.STUDY_ROOM_RUNTIME_PROFILE = 'dev';
     process.env.STUDY_ROOM_ALLOW_INSECURE_JWKS = 'true';
     const tx = {
       application: { create: jest.fn(async () => ({ ...app, jwksUri: 'http://localhost/jwks' })) },
@@ -92,11 +95,20 @@ describe('ApplicationsService registry and invalidation', () => {
       $transaction: jest.fn(async (callback) => callback(tx)),
       application: { findMany: jest.fn(async () => [app]) },
     };
-    const service = new ApplicationsService(prisma as never, redis as never);
+    const service = new ApplicationsService(prisma as never, redis as never, new JwksUriPolicy());
     await expect(service.create({
       appId: 'app-1', issuer: 'issuer', audience: 'audience',
       jwksUri: 'http://localhost/jwks', enabled: false,
     }, 'admin')).resolves.toBeDefined();
     await expect(service.list(undefined, 0)).resolves.toEqual({ items: [app], nextCursor: null });
+  });
+
+  it('fails startup when a persisted application has an unsafe JWKS URI', async () => {
+    const prisma = {
+      application: { findMany: jest.fn(async () => [{ appId: 'legacy', jwksUri: 'http://jwks:4000/keys' }]) },
+    };
+    const service = new ApplicationsService(prisma as never, redis as never, new JwksUriPolicy());
+    await expect(service.onModuleInit()).rejects.toThrow('must use HTTPS in production');
+    expect(redis.subscribe).not.toHaveBeenCalled();
   });
 });

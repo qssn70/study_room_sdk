@@ -1,9 +1,11 @@
 import 'reflect-metadata';
 import { existsSync, readFileSync } from 'fs';
 import { resolve } from 'path';
+import { trustProxyHops } from './common/runtime-config';
 import { startTelemetry, stopTelemetry } from './telemetry';
 
 async function bootstrap() {
+  const configuredTrustProxyHops = trustProxyHops();
   await startTelemetry();
   const [common, core, swagger, express, helmetModule, yaml, application] = await Promise.all([
     import('@nestjs/common'),
@@ -25,9 +27,8 @@ async function bootstrap() {
     bodyParser: false,
     logger: new ConsoleLogger({ json: process.env.NODE_ENV === 'production' }),
   });
-  const trustProxyHops = Number(process.env.STUDY_ROOM_TRUST_PROXY_HOPS ?? 0);
-  if (Number.isSafeInteger(trustProxyHops) && trustProxyHops > 0) {
-    app.getHttpAdapter().getInstance().set('trust proxy', trustProxyHops);
+  if (configuredTrustProxyHops > 0) {
+    app.getHttpAdapter().getInstance().set('trust proxy', configuredTrustProxyHops);
   }
   app.use(helmet());
   app.use(json({ limit: '64kb' }));

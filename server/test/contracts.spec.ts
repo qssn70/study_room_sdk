@@ -11,7 +11,13 @@ type OpenApiDocument = {
   paths: Record<string, Record<string, unknown>>;
   components: {
     securitySchemes: Record<string, unknown>;
-    schemas: Record<string, { type?: string; additionalProperties?: boolean }>;
+    schemas: Record<string, {
+      type?: string;
+      additionalProperties?: boolean;
+      minProperties?: number;
+      properties?: Record<string, Record<string, unknown>>;
+    }>;
+    responses: Record<string, { headers?: Record<string, unknown> }>;
   };
 };
 
@@ -48,6 +54,11 @@ describe('authoritative contracts', () => {
       .filter(([, schema]) => schema.type === 'object');
     expect(objects.length).toBeGreaterThan(10);
     expect(objects.filter(([, schema]) => schema.additionalProperties !== false)).toEqual([]);
+    expect(openapi.components.schemas.UpdateApplicationRequest.minProperties).toBe(1);
+    expect(openapi.components.schemas.CreateApplicationRequest.properties?.chatRetentionDays?.maximum).toBe(36500);
+    expect(openapi.components.schemas.CreateRoomRequest.properties?.title?.pattern).toBe('\\S');
+    expect(openapi.components.schemas.SendMessageRequest.properties?.text?.pattern).toBe('\\S');
+    expect(openapi.components.responses.TooManyRequests.headers).toHaveProperty('Retry-After');
   });
 
   it('compiles a discriminated realtime union and rejects mismatched payloads', () => {
@@ -79,6 +90,7 @@ describe('authoritative contracts', () => {
 
   it('generates concrete TypeScript and Dart wire types', () => {
     const typescript = readFileSync(resolve(root, 'server', 'src', 'generated', 'contract-types.ts'), 'utf8');
+    const requestDtos = readFileSync(resolve(root, 'server', 'src', 'generated', 'request-dtos.ts'), 'utf8');
     const dart = readFileSync(resolve(root, 'packages', 'study_room_sdk', 'lib', 'src', 'generated_contract.dart'), 'utf8');
     expect(typescript).toContain('export interface operations');
     expect(typescript).toContain('export type RealtimeEnvelopeWire =');
@@ -94,5 +106,9 @@ describe('authoritative contracts', () => {
     expect(dart).toContain('final class ApplicationWire');
     expect(dart).toContain('sealed class RealtimeEnvelopeWire');
     expect(dart).not.toContain('typedef ApplicationWire = Map');
+    expect(requestDtos).toContain('export class CreateApplicationBodyDto');
+    expect(requestDtos).toContain('export class DecideJoinRequestParamsDto');
+    expect(requestDtos).toContain('export class ListActiveSessionsQueryDto');
+    expect(requestDtos).toContain('@Type(() => Number)');
   });
 });

@@ -18,7 +18,6 @@ export class RetentionService {
       if (!lock?.locked) return;
       const applications = await tx.application.findMany({
         where: {
-          enabled: true,
           OR: [{ chatRetentionDays: { not: null } }, { sessionRetentionDays: { not: null } }],
         },
       });

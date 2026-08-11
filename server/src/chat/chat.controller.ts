@@ -1,9 +1,14 @@
-import { Body, Controller, Get, Param, ParseUUIDPipe, Post, Query } from '@nestjs/common';
+import { Body, Controller, Get, Param, Post, Query } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { CurrentIdentity } from '../auth/current-identity.decorator';
 import { ExternalIdentity } from '../domain';
+import {
+  ListMessagesParamsDto,
+  ListMessagesQueryDto,
+  SendMessageBodyDto,
+  SendMessageParamsDto,
+} from '../generated/request-dtos';
 import { RealtimePublisher } from '../realtime/realtime.publisher';
-import { MessagePageQueryDto, SendMessageDto } from './chat.dto';
 import { ChatService } from './chat.service';
 
 @ApiTags('chat')
@@ -14,21 +19,21 @@ export class ChatController {
 
   @Get()
   history(
-    @Param('roomId', new ParseUUIDPipe({ version: '4' })) roomId: string,
+    @Param() params: ListMessagesParamsDto,
     @CurrentIdentity() identity: ExternalIdentity,
-    @Query() query: MessagePageQueryDto,
+    @Query() query: ListMessagesQueryDto,
   ) {
-    return this.chat.history(roomId, identity, query.cursor, query.limit);
+    return this.chat.history(params.roomId, identity, query.cursor, query.limit);
   }
 
   @Post()
   async send(
-    @Param('roomId', new ParseUUIDPipe({ version: '4' })) roomId: string,
+    @Param() params: SendMessageParamsDto,
     @CurrentIdentity() identity: ExternalIdentity,
-    @Body() body: SendMessageDto,
+    @Body() body: SendMessageBodyDto,
   ) {
-    const message = await this.chat.send(roomId, identity, body.text);
-    this.realtime.publishRoom(identity.appId, roomId, 'chat.message.created', message, null);
+    const message = await this.chat.send(params.roomId, identity, body.text);
+    this.realtime.publishRoom(identity.appId, params.roomId, 'chat.message.created', message, null);
     return message;
   }
 }

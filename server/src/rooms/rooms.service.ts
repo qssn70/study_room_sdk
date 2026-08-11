@@ -29,7 +29,14 @@ export class RoomsService {
           appId: identity.appId,
           title: normalized,
           memberships: {
-            create: { appId: identity.appId, userId: identity.userId, role: RoomRole.OWNER },
+            create: {
+              role: RoomRole.OWNER,
+              user: {
+                connect: {
+                  appId_userId: { appId: identity.appId, userId: identity.userId },
+                },
+              },
+            },
           },
         },
         include: roomInclude,
@@ -96,7 +103,10 @@ export class RoomsService {
     return owner.userId;
   }
 
-  async requestJoin(roomId: string, identity: ExternalIdentity): Promise<JoinRequestDto> {
+  async requestJoin(
+    roomId: string,
+    identity: ExternalIdentity,
+  ): Promise<{ request: JoinRequestDto; created: boolean }> {
     const room = await this.prisma.room.findFirst({
       where: { id: roomId, appId: identity.appId, deletedAt: null },
       select: { id: true },
@@ -107,20 +117,22 @@ export class RoomsService {
       where: { roomId, appId: identity.appId, userId: identity.userId, status: 'PENDING' },
       include: { user: true },
     });
-    if (existing) return this.toJoinRequestDto(existing);
+    if (existing) return { request: this.toJoinRequestDto(existing), created: false };
     try {
       const request = await this.prisma.joinRequest.create({
         data: { roomId, appId: identity.appId, userId: identity.userId },
         include: { user: true },
       });
-      return this.toJoinRequestDto(request);
+      return { request: this.toJoinRequestDto(request), created: true };
     } catch (error) {
       if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
-        const concurrent = await this.prisma.joinRequest.findFirstOrThrow({
+        const concurrent = await this.prisma.joinRequest.findFirst({
           where: { roomId, appId: identity.appId, userId: identity.userId, status: 'PENDING' },
           include: { user: true },
         });
-        return this.toJoinRequestDto(concurrent);
+        if (concurrent) {
+          return { request: this.toJoinRequestDto(concurrent), created: false };
+        }
       }
       throw error;
     }

@@ -1,14 +1,19 @@
 x-api-environment: &api-environment
-  NODE_ENV: production
+  NODE_ENV: ${NODE_ENV:-production}
   PORT: 3000
   DATABASE_URL: postgresql://${POSTGRES_USER:-study_room}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-study_room}
   REDIS_URL: redis://redis:6379
   STUDY_ROOM_ALLOWED_ORIGINS: ${STUDY_ROOM_ALLOWED_ORIGINS:-http://localhost:8080,http://localhost:3000}
-  STUDY_ROOM_ADMIN_JWKS_URL: http://jwks:4000/admin/jwks.json
-  STUDY_ROOM_ADMIN_JWT_ISSUER: http://jwks:4000/admin
-  STUDY_ROOM_ADMIN_JWT_AUDIENCE: study-room-admin
-  STUDY_ROOM_ALLOW_INSECURE_JWKS: "true"
-  STUDY_ROOM_TRUST_PROXY_HOPS: 1
+  STUDY_ROOM_RUNTIME_PROFILE: ${STUDY_ROOM_RUNTIME_PROFILE:-production}
+  STUDY_ROOM_ADMIN_JWKS_URL: ${STUDY_ROOM_ADMIN_JWKS_URL:?Set STUDY_ROOM_ADMIN_JWKS_URL to an HTTPS endpoint}
+  STUDY_ROOM_ADMIN_JWT_ISSUER: ${STUDY_ROOM_ADMIN_JWT_ISSUER:?Set STUDY_ROOM_ADMIN_JWT_ISSUER}
+  STUDY_ROOM_ADMIN_JWT_AUDIENCE: ${STUDY_ROOM_ADMIN_JWT_AUDIENCE:?Set STUDY_ROOM_ADMIN_JWT_AUDIENCE}
+  STUDY_ROOM_ALLOW_INSECURE_JWKS: ${STUDY_ROOM_ALLOW_INSECURE_JWKS:-false}
+  STUDY_ROOM_TRUST_PROXY_HOPS: ${STUDY_ROOM_TRUST_PROXY_HOPS:-1}
+  STUDY_ROOM_IP_RATE_LIMIT: ${STUDY_ROOM_IP_RATE_LIMIT:-120}
+  STUDY_ROOM_APP_RATE_LIMIT: ${STUDY_ROOM_APP_RATE_LIMIT:-600}
+  STUDY_ROOM_USER_RATE_LIMIT: ${STUDY_ROOM_USER_RATE_LIMIT:-180}
+  STUDY_ROOM_ADMIN_RATE_LIMIT: ${STUDY_ROOM_ADMIN_RATE_LIMIT:-120}
   STUDY_ROOM_JWKS_CACHE_MS: ${STUDY_ROOM_JWKS_CACHE_MS:-300000}
   STUDY_ROOM_PRESENCE_TTL_SECONDS: ${STUDY_ROOM_PRESENCE_TTL_SECONDS:-60}
   STUDY_ROOM_PRESENCE_REFRESH_SECONDS: ${STUDY_ROOM_PRESENCE_REFRESH_SECONDS:-20}
@@ -21,11 +26,9 @@ x-api: &api
   environment: *api-environment
   restart: unless-stopped
   depends_on:
-    seed:
+    migrate:
       condition: service_completed_successfully
     redis:
-      condition: service_healthy
-    jwks:
       condition: service_healthy
   healthcheck:
     test: ["CMD", "node", "-e", "fetch('http://localhost:3000/health/ready').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
@@ -53,6 +56,7 @@ services:
     restart: "no"
 
   seed:
+    profiles: ["dev", "test"]
     build:
       context: .
       dockerfile: server/Dockerfile
@@ -106,11 +110,12 @@ services:
     restart: unless-stopped
 
   jwks:
+    profiles: ["dev", "test"]
     image: node:22-alpine
     command: ["node", "/fixture/dev-jwks.mjs"]
     environment:
       PORT: 4000
-      E2E_FIXTURE_CONTROL_TOKEN: ${E2E_FIXTURE_CONTROL_TOKEN:-local-fixture-control}
+      E2E_FIXTURE_CONTROL_TOKEN: ${E2E_FIXTURE_CONTROL_TOKEN:-}
       E2E_ALLOW_SHORT_LIVED_TOKENS: ${E2E_ALLOW_SHORT_LIVED_TOKENS:-false}
     ports:
       - "127.0.0.1:${STUDY_ROOM_JWKS_PORT:-4000}:4000"
@@ -133,11 +138,13 @@ services:
       E2E_API_1: http://api-1:3000
       E2E_API_2: http://api-2:3000
       E2E_JWKS: http://jwks:4000
-      E2E_FIXTURE_CONTROL_TOKEN: ${E2E_FIXTURE_CONTROL_TOKEN:-local-fixture-control}
+      E2E_FIXTURE_CONTROL_TOKEN: ${E2E_FIXTURE_CONTROL_TOKEN:-}
       E2E_RUN_ID: ${E2E_RUN_ID:-local}
       E2E_STATE_PATH: /state/persistence.json
       E2E_JWKS_RETIRE_WAIT_MS: ${E2E_JWKS_RETIRE_WAIT_MS:-302000}
       E2E_PRESENCE_EXPIRE_WAIT_MS: ${E2E_PRESENCE_EXPIRE_WAIT_MS:-62000}
+      STUDY_ROOM_IP_RATE_LIMIT: ${STUDY_ROOM_IP_RATE_LIMIT:-120}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-study_room}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-study_room}
       REDIS_URL: redis://redis:6379
     volumes:
       - study_room_e2e_state:/state

@@ -97,7 +97,7 @@ function tokenPayload(input) {
 
   const allowedScenarios = new Set([
     'valid', 'expired', 'wrong-issuer', 'wrong-audience', 'wrong-app-id',
-    'unknown-kid', 'missing-scope',
+    'unknown-kid', 'missing-scope', 'missing-metrics-scope',
   ]);
   const scenario = String(input.scenario ?? 'valid');
   if (!allowedScenarios.has(scenario)) throw new Error('Unknown token scenario');
@@ -109,7 +109,11 @@ function tokenPayload(input) {
       sub: String(input.sub ?? 'local-admin'),
       iss: scenario === 'wrong-issuer' ? 'http://invalid-issuer.test/admin' : 'http://jwks:4000/admin',
       aud: scenario === 'wrong-audience' ? 'invalid-admin-audience' : 'study-room-admin',
-      scope: scenario === 'missing-scope' ? 'metrics:read' : 'apps:manage metrics:read',
+      scope: scenario === 'missing-scope'
+        ? 'metrics:read'
+        : scenario === 'missing-metrics-scope'
+          ? 'apps:manage'
+          : 'apps:manage metrics:read',
       iat: now,
       exp,
     };

@@ -74,6 +74,7 @@ const methods = new Set(['get', 'post', 'put', 'patch', 'delete', 'options', 'he
 const operationIds = new Set();
 const schemas = openapi.components?.schemas ?? {};
 const rewrittenSchemas = rewriteRefs(schemas);
+let compiledRequests = 0;
 let compiledResponses = 0;
 for (const [path, pathItem] of Object.entries(openapi.paths ?? {})) {
   for (const [method, operation] of Object.entries(pathItem)) {
@@ -85,10 +86,41 @@ for (const [path, pathItem] of Object.entries(openapi.paths ?? {})) {
     if (!Array.isArray(operation.security)) {
       throw new Error(`Explicit security is required at ${method.toUpperCase()} ${path}`);
     }
+    const parameters = mergeParameters(pathItem.parameters ?? [], operation.parameters ?? []);
+    for (const parameter of parameters) {
+      if (!parameter.schema) {
+        throw new Error(`Parameter ${parameter.name} has no schema at ${method.toUpperCase()} ${path}`);
+      }
+      ajv.compile({ ...rewriteRefs(parameter.schema), $defs: rewrittenSchemas });
+      compiledRequests += 1;
+    }
+    for (const name of [...path.matchAll(/\{([^}]+)\}/g)].map((match) => match[1])) {
+      if (!parameters.some((parameter) => parameter.in === 'path' && parameter.name === name)) {
+        throw new Error(`Path parameter ${name} is undeclared at ${method.toUpperCase()} ${path}`);
+      }
+    }
+    const bodySchema = operation.requestBody?.content?.['application/json']?.schema;
+    if (operation.requestBody && !bodySchema) {
+      throw new Error(`JSON request body schema is required at ${method.toUpperCase()} ${path}`);
+    }
+    if (bodySchema) {
+      ajv.compile({ ...rewriteRefs(bodySchema), $defs: rewrittenSchemas });
+      compiledRequests += 1;
+    }
+    if (operation.security.length > 0) {
+      for (const status of ['429', '503']) {
+        if (!operation.responses?.[status]) {
+          throw new Error(`Protected operation must declare ${status} at ${method.toUpperCase()} ${path}`);
+        }
+      }
+    }
     for (const [status, declared] of Object.entries(operation.responses ?? {})) {
       const response = dereferenceResponse(declared, openapi.components?.responses ?? {});
       if (!response.headers?.['x-request-id']) {
         throw new Error(`Response ${status} has no x-request-id header at ${method.toUpperCase()} ${path}`);
+      }
+      if (status === '429' && !Object.keys(response.headers).some((name) => name.toLowerCase() === 'retry-after')) {
+        throw new Error(`Response 429 has no Retry-After header at ${method.toUpperCase()} ${path}`);
       }
       if (status === '204') {
         if (response.content) throw new Error(`204 response must not declare content at ${method.toUpperCase()} ${path}`);
@@ -106,6 +138,7 @@ for (const [path, pathItem] of Object.entries(openapi.paths ?? {})) {
     }
   }
 }
+if (compiledRequests === 0) throw new Error('No request schemas were compiled');
 if (compiledResponses === 0) throw new Error('No response schemas were compiled');
 
 const generated = spawnSync(
@@ -114,7 +147,7 @@ const generated = spawnSync(
   { stdio: 'inherit' },
 );
 if (generated.status !== 0) process.exit(generated.status ?? 1);
-console.log(`Contracts are valid: ${operationIds.size} operations, ${compiledResponses} response schemas, ${samples.length} realtime variants.`);
+console.log(`Contracts are valid: ${operationIds.size} operations, ${compiledRequests} request schemas, ${compiledResponses} response schemas, ${samples.length} realtime variants.`);
 
 function rewriteRefs(value) {
   if (Array.isArray(value)) return value.map(rewriteRefs);
@@ -132,5 +165,22 @@ function dereferenceResponse(response, responses) {
   const name = response.$ref.split('/').at(-1);
   const resolved = responses[name];
   if (!resolved) throw new Error(`Unknown response reference: ${response.$ref}`);
+  return resolved;
+}
+
+function mergeParameters(pathParameters, operationParameters) {
+  const merged = new Map();
+  for (const candidate of [...pathParameters, ...operationParameters]) {
+    const parameter = dereferenceParameter(candidate);
+    merged.set(`${parameter.in}:${parameter.name}`, parameter);
+  }
+  return [...merged.values()];
+}
+
+function dereferenceParameter(parameter) {
+  if (!parameter?.$ref) return parameter ?? {};
+  const name = parameter.$ref.split('/').at(-1);
+  const resolved = openapi.components?.parameters?.[name];
+  if (!resolved) throw new Error(`Unknown parameter reference: ${parameter.$ref}`);
   return resolved;
 }

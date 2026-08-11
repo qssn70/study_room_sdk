@@ -1,6 +1,7 @@
 import { UnauthorizedException } from '@nestjs/common';
 import { generateKeyPairSync } from 'crypto';
 import jwt from 'jsonwebtoken';
+import { JwksUriPolicy } from '../src/applications/jwks-uri.policy';
 import { AuthService } from '../src/auth/auth.service';
 
 describe('AuthService v1 JWKS verification', () => {
@@ -18,7 +19,12 @@ describe('AuthService v1 JWKS verification', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
-    service = new AuthService(applications as never, prisma as never);
+    delete process.env.STUDY_ROOM_RUNTIME_PROFILE;
+    delete process.env.STUDY_ROOM_ALLOW_INSECURE_JWKS;
+    delete process.env.STUDY_ROOM_ADMIN_JWKS_URL;
+    delete process.env.STUDY_ROOM_ADMIN_JWT_ISSUER;
+    delete process.env.STUDY_ROOM_ADMIN_JWT_AUDIENCE;
+    service = new AuthService(applications as never, prisma as never, new JwksUriPolicy());
     jest.spyOn(service as never, 'client' as never).mockReturnValue({
       getSigningKey: jest.fn(async () => ({ getPublicKey: () => publicKey.export({ type: 'spki', format: 'pem' }) })),
     } as never);
@@ -92,6 +98,20 @@ describe('AuthService v1 JWKS verification', () => {
       .resolves.toMatchObject({ scopes: ['apps:manage'] });
   });
 
+  it('validates the administrator trust configuration during startup', () => {
+    process.env.STUDY_ROOM_ADMIN_JWKS_URL = 'https://admin.example/jwks';
+    process.env.STUDY_ROOM_ADMIN_JWT_ISSUER = 'https://admin.example';
+    process.env.STUDY_ROOM_ADMIN_JWT_AUDIENCE = 'study-room-admin';
+    expect(() => service.onModuleInit()).not.toThrow();
+
+    process.env.STUDY_ROOM_ADMIN_JWKS_URL = 'http://localhost:4000/admin/jwks.json';
+    process.env.STUDY_ROOM_ALLOW_INSECURE_JWKS = 'true';
+    expect(() => service.onModuleInit()).toThrow('must use HTTPS in production');
+
+    process.env.STUDY_ROOM_RUNTIME_PROFILE = 'test';
+    expect(() => service.onModuleInit()).not.toThrow();
+  });
+
   it('rejects malformed claims, algorithms, app lookup failures, and bearer syntax', async () => {
     await expect(service.verifyBearer('Basic value')).rejects.toBeInstanceOf(UnauthorizedException);
     await expect(service.verifyBearer('Bearer ')).rejects.toBeInstanceOf(UnauthorizedException);
@@ -99,6 +119,8 @@ describe('AuthService v1 JWKS verification', () => {
     applications.getEnabled.mockRejectedValueOnce(new Error('disabled'));
     await expect(service.verifyBearer(`Bearer ${token()}`)).rejects.toBeInstanceOf(UnauthorizedException);
     await expect(service.verifyBearer(`Bearer ${token({ sub: '' })}`)).rejects.toBeInstanceOf(UnauthorizedException);
+    await expect(service.verifyBearer(`Bearer ${token({ sub: 'u'.repeat(257) })}`))
+      .rejects.toBeInstanceOf(UnauthorizedException);
     await expect(service.verifyBearer(`Bearer ${token({ displayName: '' })}`)).rejects.toBeInstanceOf(UnauthorizedException);
     await expect(service.verifyBearer(`Bearer ${token({ avatarUrl: 7 })}`)).rejects.toBeInstanceOf(UnauthorizedException);
     const hs = jwt.sign(

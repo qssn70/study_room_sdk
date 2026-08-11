@@ -326,7 +326,7 @@ export interface components {
             readonly id: string;
             /** Format: uuid */
             readonly roomId: string;
-            readonly senderId: string;
+            readonly senderId: components["schemas"]["UserId"];
             readonly senderName: string;
             /** Format: date-time */
             readonly sentAt: string;
@@ -366,7 +366,7 @@ export interface components {
             readonly status: components["schemas"]["JoinRequestStatus"];
             /** Format: date-time */
             readonly updatedAt: string;
-            readonly userId: string;
+            readonly userId: components["schemas"]["UserId"];
         };
         /** @enum {string} */
         readonly JoinRequestDecision: "approved" | "rejected";
@@ -384,7 +384,7 @@ export interface components {
         readonly Member: {
             readonly avatarUrl: string;
             readonly displayName: string;
-            readonly id: string;
+            readonly id: components["schemas"]["UserId"];
             readonly role: components["schemas"]["RoomRole"];
             readonly status: components["schemas"]["PresenceStatus"];
         };
@@ -437,10 +437,10 @@ export interface components {
             readonly status: components["schemas"]["SessionStatus"];
             /** Format: date-time */
             readonly updatedAt: string;
-            readonly userId: string;
+            readonly userId: components["schemas"]["UserId"];
         };
         readonly TransferOwnershipRequest: {
-            readonly userId: string;
+            readonly userId: components["schemas"]["UserId"];
         };
         readonly UpdateApplicationRequest: {
             readonly audience?: string;
@@ -454,6 +454,7 @@ export interface components {
         readonly UpdateSessionRequest: {
             readonly status: components["schemas"]["SessionStatus"];
         };
+        readonly UserId: string;
     };
     responses: {
         /** @description Invalid request */
@@ -519,6 +520,7 @@ export interface components {
         /** @description Rate limit exceeded */
         readonly TooManyRequests: {
             headers: {
+                readonly "Retry-After": components["headers"]["RetryAfter"];
                 readonly "x-request-id": components["headers"]["RequestId"];
                 readonly [name: string]: unknown;
             };
@@ -544,13 +546,15 @@ export interface components {
         readonly RequestId: string;
         readonly RoomId: string;
         readonly SessionId: string;
-        readonly UserId: string;
+        readonly UserId: components["schemas"]["UserId"];
         readonly UuidCursor: string;
     };
     requestBodies: never;
     headers: {
         /** @description Request correlation identifier */
         readonly RequestId: string;
+        /** @description Seconds until the current rate-limit window permits another request */
+        readonly RetryAfter: number;
     };
     pathItems: never;
 }
@@ -583,6 +587,7 @@ export interface operations {
             readonly 403: components["responses"]["Forbidden"];
             readonly 429: components["responses"]["TooManyRequests"];
             readonly 500: components["responses"]["InternalServerError"];
+            readonly 503: components["responses"]["ServiceUnavailable"];
         };
     };
     readonly createApplication: {
@@ -614,6 +619,7 @@ export interface operations {
             readonly 409: components["responses"]["Conflict"];
             readonly 429: components["responses"]["TooManyRequests"];
             readonly 500: components["responses"]["InternalServerError"];
+            readonly 503: components["responses"]["ServiceUnavailable"];
         };
     };
     readonly getApplication: {
@@ -642,6 +648,7 @@ export interface operations {
             readonly 404: components["responses"]["NotFound"];
             readonly 429: components["responses"]["TooManyRequests"];
             readonly 500: components["responses"]["InternalServerError"];
+            readonly 503: components["responses"]["ServiceUnavailable"];
         };
     };
     readonly updateApplication: {
@@ -675,6 +682,7 @@ export interface operations {
             readonly 404: components["responses"]["NotFound"];
             readonly 429: components["responses"]["TooManyRequests"];
             readonly 500: components["responses"]["InternalServerError"];
+            readonly 503: components["responses"]["ServiceUnavailable"];
         };
     };
     readonly getLiveness: {
@@ -744,6 +752,7 @@ export interface operations {
             readonly 403: components["responses"]["Forbidden"];
             readonly 429: components["responses"]["TooManyRequests"];
             readonly 500: components["responses"]["InternalServerError"];
+            readonly 503: components["responses"]["ServiceUnavailable"];
         };
     };
     readonly listMyJoinRequests: {
@@ -772,6 +781,7 @@ export interface operations {
             readonly 401: components["responses"]["Unauthorized"];
             readonly 429: components["responses"]["TooManyRequests"];
             readonly 500: components["responses"]["InternalServerError"];
+            readonly 503: components["responses"]["ServiceUnavailable"];
         };
     };
     readonly listRooms: {
@@ -800,6 +810,7 @@ export interface operations {
             readonly 401: components["responses"]["Unauthorized"];
             readonly 429: components["responses"]["TooManyRequests"];
             readonly 500: components["responses"]["InternalServerError"];
+            readonly 503: components["responses"]["ServiceUnavailable"];
         };
     };
     readonly createRoom: {
@@ -830,6 +841,7 @@ export interface operations {
             readonly 409: components["responses"]["Conflict"];
             readonly 429: components["responses"]["TooManyRequests"];
             readonly 500: components["responses"]["InternalServerError"];
+            readonly 503: components["responses"]["ServiceUnavailable"];
         };
     };
     readonly getRoom: {
@@ -859,6 +871,7 @@ export interface operations {
             readonly 404: components["responses"]["NotFound"];
             readonly 429: components["responses"]["TooManyRequests"];
             readonly 500: components["responses"]["InternalServerError"];
+            readonly 503: components["responses"]["ServiceUnavailable"];
         };
     };
     readonly deleteRoom: {
@@ -887,6 +900,7 @@ export interface operations {
             readonly 409: components["responses"]["Conflict"];
             readonly 429: components["responses"]["TooManyRequests"];
             readonly 500: components["responses"]["InternalServerError"];
+            readonly 503: components["responses"]["ServiceUnavailable"];
         };
     };
     readonly listActiveSessions: {
@@ -919,6 +933,7 @@ export interface operations {
             readonly 404: components["responses"]["NotFound"];
             readonly 429: components["responses"]["TooManyRequests"];
             readonly 500: components["responses"]["InternalServerError"];
+            readonly 503: components["responses"]["ServiceUnavailable"];
         };
     };
     readonly listRoomJoinRequests: {
@@ -951,6 +966,7 @@ export interface operations {
             readonly 404: components["responses"]["NotFound"];
             readonly 429: components["responses"]["TooManyRequests"];
             readonly 500: components["responses"]["InternalServerError"];
+            readonly 503: components["responses"]["ServiceUnavailable"];
         };
     };
     readonly requestRoomAccess: {
@@ -980,6 +996,7 @@ export interface operations {
             readonly 409: components["responses"]["Conflict"];
             readonly 429: components["responses"]["TooManyRequests"];
             readonly 500: components["responses"]["InternalServerError"];
+            readonly 503: components["responses"]["ServiceUnavailable"];
         };
     };
     readonly cancelRoomAccessRequest: {
@@ -1006,6 +1023,7 @@ export interface operations {
             readonly 404: components["responses"]["NotFound"];
             readonly 429: components["responses"]["TooManyRequests"];
             readonly 500: components["responses"]["InternalServerError"];
+            readonly 503: components["responses"]["ServiceUnavailable"];
         };
     };
     readonly decideJoinRequest: {
@@ -1041,6 +1059,7 @@ export interface operations {
             readonly 409: components["responses"]["Conflict"];
             readonly 429: components["responses"]["TooManyRequests"];
             readonly 500: components["responses"]["InternalServerError"];
+            readonly 503: components["responses"]["ServiceUnavailable"];
         };
     };
     readonly removeRoomMember: {
@@ -1070,6 +1089,7 @@ export interface operations {
             readonly 409: components["responses"]["Conflict"];
             readonly 429: components["responses"]["TooManyRequests"];
             readonly 500: components["responses"]["InternalServerError"];
+            readonly 503: components["responses"]["ServiceUnavailable"];
         };
     };
     readonly leaveRoom: {
@@ -1098,6 +1118,7 @@ export interface operations {
             readonly 409: components["responses"]["Conflict"];
             readonly 429: components["responses"]["TooManyRequests"];
             readonly 500: components["responses"]["InternalServerError"];
+            readonly 503: components["responses"]["ServiceUnavailable"];
         };
     };
     readonly listMessages: {
@@ -1130,6 +1151,7 @@ export interface operations {
             readonly 404: components["responses"]["NotFound"];
             readonly 429: components["responses"]["TooManyRequests"];
             readonly 500: components["responses"]["InternalServerError"];
+            readonly 503: components["responses"]["ServiceUnavailable"];
         };
     };
     readonly sendMessage: {
@@ -1163,6 +1185,7 @@ export interface operations {
             readonly 404: components["responses"]["NotFound"];
             readonly 429: components["responses"]["TooManyRequests"];
             readonly 500: components["responses"]["InternalServerError"];
+            readonly 503: components["responses"]["ServiceUnavailable"];
         };
     };
     readonly transferRoomOwnership: {
@@ -1197,6 +1220,7 @@ export interface operations {
             readonly 409: components["responses"]["Conflict"];
             readonly 429: components["responses"]["TooManyRequests"];
             readonly 500: components["responses"]["InternalServerError"];
+            readonly 503: components["responses"]["ServiceUnavailable"];
         };
     };
     readonly startSession: {
@@ -1227,6 +1251,7 @@ export interface operations {
             readonly 409: components["responses"]["Conflict"];
             readonly 429: components["responses"]["TooManyRequests"];
             readonly 500: components["responses"]["InternalServerError"];
+            readonly 503: components["responses"]["ServiceUnavailable"];
         };
     };
     readonly updateSession: {
@@ -1261,6 +1286,7 @@ export interface operations {
             readonly 409: components["responses"]["Conflict"];
             readonly 429: components["responses"]["TooManyRequests"];
             readonly 500: components["responses"]["InternalServerError"];
+            readonly 503: components["responses"]["ServiceUnavailable"];
         };
     };
 }
@@ -1269,6 +1295,7 @@ export const contractVersion = "0.4.0-beta.1" as const;
 export const realtimeSchemaVersion = 1 as const;
 
 export type AppIdWire = components["schemas"]["AppId"];
+export type UserIdWire = components["schemas"]["UserId"];
 export type PresenceStatusWire = components["schemas"]["PresenceStatus"];
 export type RoomRoleWire = components["schemas"]["RoomRole"];
 export type JoinRequestStatusWire = components["schemas"]["JoinRequestStatus"];

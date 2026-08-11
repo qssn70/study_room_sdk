@@ -1,8 +1,9 @@
 import { BadRequestException, Injectable, NotFoundException, OnModuleInit } from '@nestjs/common';
 import { Application, Prisma } from '@prisma/client';
+import { CreateApplicationBodyDto, UpdateApplicationBodyDto } from '../generated/request-dtos';
 import { PrismaService } from '../prisma/prisma.service';
 import { RedisService } from '../redis/redis.service';
-import { CreateApplicationDto, UpdateApplicationDto } from './application.dto';
+import { JwksUriPolicy, JwksUriPolicyError } from './jwks-uri.policy';
 
 export const APPLICATION_CHANGE_CHANNEL = 'study-room:applications';
 
@@ -11,16 +12,29 @@ export class ApplicationsService implements OnModuleInit {
   private readonly cache = new Map<string, { value: Application; expiresAt: number }>();
   private readonly cacheTtlMs = 5 * 60 * 1000;
 
-  constructor(private readonly prisma: PrismaService, private readonly redis: RedisService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly redis: RedisService,
+    private readonly jwksUriPolicy: JwksUriPolicy,
+  ) {}
 
   async onModuleInit() {
+    const applications = await this.prisma.application.findMany({
+      select: { appId: true, jwksUri: true },
+    });
+    for (const application of applications) {
+      this.jwksUriPolicy.assertAllowed(
+        application.jwksUri,
+        `JWKS URI for application ${application.appId}`,
+      );
+    }
     await this.redis.subscribe(APPLICATION_CHANGE_CHANNEL, (message) => {
       const event = JSON.parse(message) as { appId: string };
       this.cache.delete(event.appId);
     });
   }
 
-  async create(input: CreateApplicationDto, actorId: string): Promise<Application> {
+  async create(input: CreateApplicationBodyDto, actorId: string): Promise<Application> {
     this.validateJwksUri(input.jwksUri);
     const application = await this.prisma.$transaction(async (tx) => {
       const created = await tx.application.create({
@@ -35,7 +49,7 @@ export class ApplicationsService implements OnModuleInit {
     return application;
   }
 
-  async update(appId: string, input: UpdateApplicationDto, actorId: string) {
+  async update(appId: string, input: UpdateApplicationBodyDto, actorId: string) {
     if (input.jwksUri !== undefined) this.validateJwksUri(input.jwksUri);
     const application = await this.prisma.$transaction(async (tx) => {
       const updated = await tx.application.update({ where: { appId }, data: input });
@@ -45,7 +59,7 @@ export class ApplicationsService implements OnModuleInit {
           actorId,
           action: 'application.updated',
           resourceId: appId,
-          metadata: input as Prisma.InputJsonValue,
+          metadata: input as unknown as Prisma.InputJsonValue,
         },
       });
       return updated;
@@ -95,11 +109,11 @@ export class ApplicationsService implements OnModuleInit {
   }
 
   private validateJwksUri(value: string) {
-    const uri = new URL(value);
-    const localDevelopment = process.env.STUDY_ROOM_ALLOW_INSECURE_JWKS === 'true' &&
-      ['localhost', '127.0.0.1', 'jwks'].includes(uri.hostname);
-    if (uri.protocol !== 'https:' && !(localDevelopment && uri.protocol === 'http:')) {
-      throw new BadRequestException('JWKS URI must use HTTPS outside local development');
+    try {
+      this.jwksUriPolicy.assertAllowed(value);
+    } catch (error) {
+      if (error instanceof JwksUriPolicyError) throw new BadRequestException(error.message);
+      throw error;
     }
   }
 }

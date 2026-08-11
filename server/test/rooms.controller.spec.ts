@@ -12,7 +12,7 @@ describe('RoomsController realtime privacy', () => {
       updatedAt: '2026-08-09T00:00:00.000Z',
     };
     const rooms = {
-      requestJoin: jest.fn(async () => request),
+      requestJoin: jest.fn(async () => ({ request, created: true })),
       ownerUserId: jest.fn(async () => 'owner-1'),
     };
     const realtime = {
@@ -28,7 +28,7 @@ describe('RoomsController realtime privacy', () => {
       expiresAt: new Date(Date.now() + 60_000),
     };
 
-    await expect(controller.requestJoin(request.roomId, identity)).resolves.toBe(request);
+    await expect(controller.requestJoin({ roomId: request.roomId }, identity)).resolves.toBe(request);
     expect(rooms.ownerUserId).toHaveBeenCalledWith(request.roomId, 'app-1');
     expect(realtime.publishUser).toHaveBeenCalledWith(
       'app-1',
@@ -39,5 +39,10 @@ describe('RoomsController realtime privacy', () => {
       null,
     );
     expect(realtime.publishRoom).not.toHaveBeenCalled();
+
+    rooms.requestJoin.mockResolvedValueOnce({ request, created: false });
+    await expect(controller.requestJoin({ roomId: request.roomId }, identity)).resolves.toBe(request);
+    expect(rooms.ownerUserId).toHaveBeenCalledTimes(1);
+    expect(realtime.publishUser).toHaveBeenCalledTimes(1);
   });
 });

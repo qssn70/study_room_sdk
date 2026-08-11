@@ -2,6 +2,7 @@ import { ArgumentsHost, Catch, ExceptionFilter, HttpException, HttpStatus, Logge
 import { Prisma } from '@prisma/client';
 import { Response } from 'express';
 import { AuthenticatedRequest } from '../auth/authenticated-request';
+import { RateLimitExceededException } from './rate-limit.exception';
 
 @Catch()
 export class ApiExceptionFilter implements ExceptionFilter {
@@ -43,6 +44,9 @@ export class ApiExceptionFilter implements ExceptionFilter {
       this.logger.error(
         `${request.method} ${request.originalUrl} failed requestId=${request.requestId ?? 'unknown'}: ${exception instanceof Error ? exception.message : String(exception)}`,
       );
+    }
+    if (exception instanceof RateLimitExceededException) {
+      response.setHeader('Retry-After', String(exception.retryAfterSeconds));
     }
     response.status(status).json({
       code,
