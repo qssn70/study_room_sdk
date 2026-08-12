@@ -34,7 +34,7 @@ class StudyRoomExampleLocalizationsZh extends StudyRoomExampleLocalizations {
 
   @override
   String get configurationInstructions =>
-      '请使用 --dart-define=STUDY_ROOM_API_URL=http://localhost:3000 --dart-define=STUDY_ROOM_REALTIME_URL=ws://localhost:3000/v1/realtime --dart-define=STUDY_ROOM_TOKEN=<jwt> --dart-define=STUDY_ROOM_TOKEN_EXPIRES_AT=<unix-seconds> 运行。';
+      '请使用 --dart-define=STUDY_ROOM_API_URL=http://localhost:3000 --dart-define=STUDY_ROOM_REALTIME_URL=ws://localhost:3000/v1/realtime --dart-define=STUDY_ROOM_DEV_TOKEN_URL=http://localhost:4000/token 运行。';
 
   @override
   String get demoRoomTitle => '示例专注房间';

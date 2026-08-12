@@ -53,12 +53,20 @@ function jwt(ring, payload, scenario = 'valid') {
   return `${signingInput}.${signature.toString('base64url')}`;
 }
 
-function json(response, status, value) {
+const tokenCorsHeaders = {
+  'access-control-allow-origin': '*',
+  'access-control-allow-methods': 'POST, OPTIONS',
+  'access-control-allow-headers': 'content-type',
+  'access-control-max-age': '600',
+};
+
+function json(response, status, value, headers = {}) {
   const body = JSON.stringify(value);
   response.writeHead(status, {
     'content-type': 'application/json',
     'content-length': Buffer.byteLength(body),
     'cache-control': 'no-store',
+    ...headers,
   });
   response.end(body);
 }
@@ -138,8 +146,10 @@ function keyMetadata(ring) {
 }
 
 createServer(async (request, response) => {
+  let tokenRoute = false;
   try {
     const url = new URL(request.url ?? '/', `http://${request.headers.host ?? 'localhost'}`);
+    tokenRoute = url.pathname === '/token';
     if (request.method === 'GET' && url.pathname === '/health') {
       return json(response, 200, { status: 'ok' });
     }
@@ -156,6 +166,12 @@ createServer(async (request, response) => {
       return json(response, 200, { keys: ring.published.map((key) => key.publicJwk) });
     }
 
+    if (request.method === 'OPTIONS' && url.pathname === '/token') {
+      response.writeHead(204, tokenCorsHeaders);
+      response.end();
+      return;
+    }
+
     if (request.method === 'POST' && url.pathname === '/token') {
       const input = await bodyFor(request);
       const { ring, payload, scenario, exp } = tokenPayload(input);
@@ -163,7 +179,7 @@ createServer(async (request, response) => {
         accessToken: jwt(ring, payload, scenario),
         expiresAt: new Date(exp * 1000).toISOString(),
         kid: scenario === 'unknown-kid' ? `unknown-${ring.current.kid}` : ring.current.kid,
-      });
+      }, tokenCorsHeaders);
     }
 
     const control = url.pathname.match(/^\/__test\/keys\/([^/]+)\/(rotate|retire)$/);
@@ -185,7 +201,12 @@ createServer(async (request, response) => {
 
     json(response, 404, { error: 'not_found' });
   } catch (error) {
-    json(response, 400, { error: error instanceof Error ? error.message : 'invalid_request' });
+    json(
+      response,
+      400,
+      { error: error instanceof Error ? error.message : 'invalid_request' },
+      tokenRoute ? tokenCorsHeaders : {},
+    );
   }
 }).listen(port, '0.0.0.0', () => {
   console.log(`Development-only JWKS fixture listening on :${port}`);

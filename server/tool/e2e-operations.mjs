@@ -1,6 +1,6 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
-import { api1, assert, request, runId, token } from './e2e-support.mjs';
+import { api1, api2, assert, request, runId, token } from './e2e-support.mjs';
 
 const proxy = process.env.E2E_PROXY ?? 'http://proxy:8080';
 const resultPath = process.env.E2E_RESULT_PATH;
@@ -30,12 +30,14 @@ const room = await request(api1, userToken, 'POST', '/v1/rooms', { title: `Metri
 await request(api1, userToken, 'GET', `/v1/rooms/${room.id}`);
 const metrics = await status('/metrics', adminToken);
 const api1Metrics = await status('/metrics', adminToken, api1);
+const api2Ready = await status('/health/ready', undefined, api2);
 
 assert(live.response.status === 200, `Liveness returned ${live.response.status}`);
 assert(ready.response.status === 200, `Readiness returned ${ready.response.status}`);
 assert(metrics.response.status === 200, `Authorized metrics returned ${metrics.response.status}`);
 assert(metrics.text.includes('study_room_'), 'Metrics output does not contain Study Room metrics');
 assert(api1Metrics.response.status === 200, `Direct API metrics returned ${api1Metrics.response.status}`);
+assert(api2Ready.response.status === 200, `Direct API 2 readiness returned ${api2Ready.response.status}`);
 assert(api1Metrics.text.includes('study_room_'), 'Direct API metrics output does not contain Study Room metrics');
 assert([401, 403].includes(denied.response.status), `Unprivileged metrics returned ${denied.response.status}`);
 assert(anonymous.response.status === 401, `Anonymous metrics returned ${anonymous.response.status}`);
@@ -80,6 +82,7 @@ const result = {
     metrics: metrics.response.status,
     unprivilegedMetrics: denied.response.status,
     anonymousMetrics: anonymous.response.status,
+    api2Ready: api2Ready.response.status,
   },
   metrics: {
     httpSampleCount: metricSamples.length,

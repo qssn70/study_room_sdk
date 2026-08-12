@@ -1,6 +1,6 @@
 // coverage:ignore-file
 // GENERATED FILE. Run npm run generate:contracts; do not edit.
-const studyRoomContractVersion = "0.4.0-beta.1";
+const studyRoomContractVersion = "0.4.0-rc.1";
 const studyRoomRealtimeSchemaVersion = 1;
 const studyRoomRealtimeEventTypes = <String>{
   "room.state",

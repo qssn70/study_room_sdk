@@ -152,7 +152,7 @@ abstract class StudyRoomExampleLocalizations {
   /// No description provided for @configurationInstructions.
   ///
   /// In en, this message translates to:
-  /// **'Run with --dart-define=STUDY_ROOM_API_URL=http://localhost:3000 --dart-define=STUDY_ROOM_REALTIME_URL=ws://localhost:3000/v1/realtime --dart-define=STUDY_ROOM_TOKEN=<jwt> --dart-define=STUDY_ROOM_TOKEN_EXPIRES_AT=<unix-seconds>.'**
+  /// **'Run with --dart-define=STUDY_ROOM_API_URL=http://localhost:3000 --dart-define=STUDY_ROOM_REALTIME_URL=ws://localhost:3000/v1/realtime --dart-define=STUDY_ROOM_DEV_TOKEN_URL=http://localhost:4000/token.'**
   String get configurationInstructions;
 
   /// No description provided for @demoRoomTitle.

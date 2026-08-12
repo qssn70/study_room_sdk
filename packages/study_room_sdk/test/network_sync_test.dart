@@ -529,8 +529,8 @@ StudyRoomSdk _sdk({
   ),
 );
 
-StudyRoomAccessToken _accessToken(String value) => StudyRoomAccessToken(
-  value: value,
+StudyRoomAccessToken _accessToken(String token) => StudyRoomAccessToken(
+  token: token,
   expiresAt: DateTime.now().add(const Duration(hours: 1)),
 );
 

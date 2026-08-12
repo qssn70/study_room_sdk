@@ -1,3 +1,8 @@
+## 0.4.0-rc.1
+
+- Renamed the public `StudyRoomAccessToken.value` constructor argument and field to `token`; the beta name has no compatibility alias.
+- Aligned the SDK and generated contract version with the 0.4 release candidate.
+
 ## 0.4.0-beta.1
 
 - Added generated OpenAPI/realtime wire adapters and contract drift checks.

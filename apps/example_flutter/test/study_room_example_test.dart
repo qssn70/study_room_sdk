@@ -18,8 +18,14 @@ void main() {
     addTearDown(tester.view.resetDevicePixelRatio);
 
     await tester.pumpWidget(
-      const StudyRoomExampleApp(background: _testBackground),
+      const StudyRoomExampleApp(
+        background: _testBackground,
+        autoConnect: false,
+      ),
     );
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('workflow_compact')), findsOneWidget);
+    await tester.tap(find.byKey(const Key('open_offline_focus')));
     await tester.pumpAndSettle();
 
     expect(find.text('Split'), findsOneWidget);
@@ -54,8 +60,14 @@ void main() {
     addTearDown(tester.view.resetDevicePixelRatio);
 
     await tester.pumpWidget(
-      const StudyRoomExampleApp(background: _testBackground),
+      const StudyRoomExampleApp(
+        background: _testBackground,
+        autoConnect: false,
+      ),
     );
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('workflow_wide')), findsOneWidget);
+    await tester.tap(find.byKey(const Key('open_offline_focus')));
     await tester.pumpAndSettle();
 
     expect(find.byKey(const Key('study_focus_desktop_shell')), findsOneWidget);
@@ -82,13 +94,29 @@ void main() {
       const StudyRoomExampleApp(
         background: _testBackground,
         locale: Locale('zh'),
+        autoConnect: false,
       ),
     );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('open_offline_focus')));
     await tester.pumpAndSettle();
 
     expect(find.text('分栏'), findsOneWidget);
     expect(find.text('居中'), findsOneWidget);
     expect(find.text('沉浸'), findsOneWidget);
-    expect(find.byTooltip('房间'), findsOneWidget);
+    expect(find.byKey(const Key('close_offline_focus')), findsOneWidget);
+  });
+
+  testWidgets('connection settings expose all editable endpoints', (
+    tester,
+  ) async {
+    await tester.pumpWidget(const StudyRoomExampleApp(autoConnect: false));
+    await tester.tap(find.byKey(const Key('workflow_settings')));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('api_endpoint')), findsOneWidget);
+    expect(find.byKey(const Key('realtime_endpoint')), findsOneWidget);
+    expect(find.byKey(const Key('token_endpoint')), findsOneWidget);
+    expect(find.text('Reconnect'), findsOneWidget);
   });
 }

@@ -737,15 +737,28 @@ class StudyRoomSdk {
   Future<void> _unsubscribe(
     String roomId, {
     StudyRoomCancellationToken? cancellationToken,
+    bool ignoreRealtimeError = false,
   }) async {
     final linked = _linkedCancellation(cancellationToken);
-    if (_connectionState == StudyRoomConnectionState.connected ||
-        _connectionState == StudyRoomConnectionState.degraded) {
-      await _connection?.emitWithAck('room.unsubscribe', {
-        'roomId': roomId,
-      }, cancellationToken: linked);
+    Object? realtimeError;
+    StackTrace? realtimeStackTrace;
+    try {
+      if (_connectionState == StudyRoomConnectionState.connected ||
+          _connectionState == StudyRoomConnectionState.degraded) {
+        await _connection?.emitWithAck('room.unsubscribe', {
+          'roomId': roomId,
+        }, cancellationToken: linked);
+      }
+    } catch (error, stackTrace) {
+      realtimeError = error;
+      realtimeStackTrace = stackTrace;
+    } finally {
+      // Local eviction is authoritative even when the realtime ACK is lost.
+      _removeRoom(roomId);
     }
-    _removeRoom(roomId);
+    if (!ignoreRealtimeError && realtimeError != null) {
+      Error.throwWithStackTrace(realtimeError, realtimeStackTrace!);
+    }
   }
 
   Future<void> setAway(
@@ -786,7 +799,7 @@ class StudyRoomSdk {
           method,
           path,
           body: body,
-          headers: {'Authorization': 'Bearer ${token.value}'},
+          headers: {'Authorization': 'Bearer ${token.token}'},
           cancellationToken: linked,
         );
       } on StudyRoomException catch (error) {
@@ -813,7 +826,7 @@ class StudyRoomSdk {
       ),
     );
     _throwIfCancelled(cancellationToken);
-    if (token.value.trim().isEmpty ||
+    if (token.token.trim().isEmpty ||
         !token.expiresAt.isAfter(_now.add(minimumValidity))) {
       throw const StudyRoomException(
         'Token provider returned an empty or expiring token',
@@ -1063,7 +1076,11 @@ class StudyRoomsApi {
       '/v1/rooms/${_segment(roomId)}',
       cancellationToken: cancellationToken,
     );
-    await _sdk._unsubscribe(roomId, cancellationToken: cancellationToken);
+    await _sdk._unsubscribe(
+      roomId,
+      cancellationToken: cancellationToken,
+      ignoreRealtimeError: true,
+    );
   }
 }
 
@@ -1169,7 +1186,11 @@ class StudyMembersApi {
       '/v1/rooms/${_segment(roomId)}/members/me',
       cancellationToken: cancellationToken,
     );
-    await _sdk._unsubscribe(roomId, cancellationToken: cancellationToken);
+    await _sdk._unsubscribe(
+      roomId,
+      cancellationToken: cancellationToken,
+      ignoreRealtimeError: true,
+    );
   }
 
   Future<void> remove(

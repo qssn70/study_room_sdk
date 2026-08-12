@@ -19,7 +19,7 @@ final sdk = StudyRoomSdk(
     apiBaseUri: apiUri,
     realtimeUri: realtimeUri,
     tokenProvider: (request) async => StudyRoomAccessToken(
-      value: await auth.studyRoomToken(forceRefresh: request.forceRefresh),
+      token: await auth.studyRoomToken(forceRefresh: request.forceRefresh),
       expiresAt: await auth.studyRoomTokenExpiry(),
     ),
   ),
@@ -34,5 +34,12 @@ try {
 ```
 
 Use `rooms`, `joinRequests`, `members`, `sessions`, and `chat` services instead of the 0.3 flat clients. Chat history and active sessions return immutable cursor pages. Presence is authoritative: running/paused sessions derive focusing/idle, while hosts may only call `setAway(roomId, bool)`. Handle `StudyRoomException`, observe `connectionStates`, and consume `syncStates` after reconnects.
+
+### Updating from a 0.4 beta
+
+The release candidate names the public access-token field `token`. Replace every
+`StudyRoomAccessToken(value: ...)` argument with
+`StudyRoomAccessToken(token: ...)`, and replace reads of `.value` with `.token`.
+There is no deprecated `value` alias.
 
 The local focus feature keeps the existing SharedPreferences key layout. Existing goals, tasks, sounds, background settings, and study records remain available when the same `localStorageNamespace` and `currentUserId` are used.

@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Study Room API
-  version: 0.4.0-beta.1
+  version: 0.4.0-rc.1
   description: Authoritative HTTP contract for the Study Room reference backend.
 servers:
   - url: http://localhost:3000

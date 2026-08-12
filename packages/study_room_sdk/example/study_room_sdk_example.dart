@@ -19,6 +19,6 @@ Future<void> main() async {
 
 Future<StudyRoomAccessToken> issueToken(StudyRoomTokenRequest request) async =>
     StudyRoomAccessToken(
-      value: 'replace-with-a-token-from-your-backend',
+      token: 'replace-with-a-token-from-your-backend',
       expiresAt: DateTime.now().add(const Duration(minutes: 5)),
     );

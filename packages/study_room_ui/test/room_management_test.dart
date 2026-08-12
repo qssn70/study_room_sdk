@@ -81,7 +81,7 @@ StudyRoomSdk _sdk(StudyRoomTransport transport) => StudyRoomSdk(
     apiBaseUri: Uri.parse('https://example.com'),
     realtimeUri: Uri.parse('wss://example.com/v1/realtime'),
     tokenProvider: (_) async => StudyRoomAccessToken(
-      value: 'token',
+      token: 'token',
       expiresAt: DateTime.now().add(const Duration(hours: 1)),
     ),
     transport: transport,

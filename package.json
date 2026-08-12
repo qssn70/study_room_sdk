@@ -1,10 +1,12 @@
 {
   "name": "study-room-sdk-workspace",
+  "version": "0.4.0-rc.1",
   "private": true,
   "scripts": {
     "demo": "cd apps/example_flutter && flutter run -d chrome",
     "test:demo": "cd apps/example_flutter && flutter test",
     "test": "npm --workspace study-room-server test",
+    "test:release-tools": "node --test tool/release-evidence.test.mjs",
     "test:all": "npm --workspace study-room-server test && cd packages/study_room_sdk && dart test && cd ../study_room_ui && flutter test && cd ../../apps/example_flutter && flutter test",
     "analyze:all": "cd packages/study_room_sdk && dart analyze && cd ../study_room_ui && flutter analyze && cd ../../apps/example_flutter && flutter analyze",
     "build": "npm --workspace study-room-server run build",

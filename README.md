@@ -2,7 +2,7 @@
 
 Production-oriented online study rooms for Flutter: a stable Dart SDK, reusable Flutter UI, and a NestJS reference backend backed by PostgreSQL and Redis.
 
-The current release line is `0.4.0-beta.1`. It is a breaking replacement for the in-memory 0.3 protocol: REST lives under `/v1`, and the Socket.IO namespace is `/v1/realtime`.
+The current release candidate is `0.4.0-rc.1`. It is a breaking replacement for the in-memory 0.3 protocol: REST lives under `/v1`, and the Socket.IO namespace is `/v1/realtime`.
 
 ## Workspace
 
@@ -41,7 +41,10 @@ final sdk = StudyRoomSdk(
   StudyRoomSdkConfig(
     apiBaseUri: Uri.parse('https://study.example.com'),
     realtimeUri: Uri.parse('wss://study.example.com/v1/realtime'),
-    tokenProvider: refreshStudyRoomAccessToken,
+    tokenProvider: (request) async => StudyRoomAccessToken(
+      token: await tokenService.issueToken(forceRefresh: request.forceRefresh),
+      expiresAt: await tokenService.expiresAt(),
+    ),
   ),
 );
 

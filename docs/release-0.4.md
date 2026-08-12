@@ -14,6 +14,8 @@ Integration candidate: owner approval workflow, session/chat persistence, Redis 
 
 Release candidate: localization/accessibility review, six-platform build matrix, operations endpoints, retention cleanup, package dry-runs, dependency audit, migration guide, and a clean staging soak.
 
+The RC is accepted only through the SHA-locked `RC evidence` workflow after all 16 required checks pass on the same `main` commit and the active `main-release-gates` Ruleset has been captured through both API JSON and UI screenshots.
+
 ## `0.4.0`
 
 Before publishing, check that `study_room_sdk` and `study_room_ui` are still available on pub.dev, remove prerelease suffixes, rerun every CI workflow from a clean tag candidate, and obtain package ownership approval. Blue/green the 0.4 backend separately from 0.3; never mix protocol versions behind one load balancer.

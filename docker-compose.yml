@@ -18,11 +18,13 @@ x-api-environment: &api-environment
   STUDY_ROOM_PRESENCE_TTL_SECONDS: ${STUDY_ROOM_PRESENCE_TTL_SECONDS:-60}
   STUDY_ROOM_PRESENCE_REFRESH_SECONDS: ${STUDY_ROOM_PRESENCE_REFRESH_SECONDS:-20}
   OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: ${OTEL_EXPORTER_OTLP_TRACES_ENDPOINT:-}
+  OTEL_SERVICE_NAME: ${OTEL_SERVICE_NAME:-study-room-server}
+  OTEL_BSP_SCHEDULE_DELAY: ${OTEL_BSP_SCHEDULE_DELAY:-5000}
+  OTEL_BSP_MAX_EXPORT_BATCH_SIZE: ${OTEL_BSP_MAX_EXPORT_BATCH_SIZE:-512}
+  OTEL_BSP_MAX_QUEUE_SIZE: ${OTEL_BSP_MAX_QUEUE_SIZE:-2048}
 
 x-api: &api
-  build:
-    context: .
-    dockerfile: server/Dockerfile
+  image: ${STUDY_ROOM_SERVER_IMAGE:-study-room-server:0.4.0-rc.1}
   environment: *api-environment
   restart: unless-stopped
   depends_on:
@@ -40,11 +42,18 @@ x-api: &api
 services:
   api-1:
     <<: *api
+    environment:
+      <<: *api-environment
+      OTEL_RESOURCE_ATTRIBUTES: service.instance.id=api-1
 
   api-2:
     <<: *api
+    environment:
+      <<: *api-environment
+      OTEL_RESOURCE_ATTRIBUTES: service.instance.id=api-2
 
   migrate:
+    image: ${STUDY_ROOM_SERVER_IMAGE:-study-room-server:0.4.0-rc.1}
     build:
       context: .
       dockerfile: server/Dockerfile
@@ -57,9 +66,7 @@ services:
 
   seed:
     profiles: ["dev", "test"]
-    build:
-      context: .
-      dockerfile: server/Dockerfile
+    image: ${STUDY_ROOM_SERVER_IMAGE:-study-room-server:0.4.0-rc.1}
     environment: *api-environment
     command: ["node", "prisma/seed.mjs"]
     depends_on:
@@ -75,12 +82,30 @@ services:
       - "${STUDY_ROOM_HTTP_PORT:-3000}:8080"
     volumes:
       - ./deploy/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./deploy/nginx-upstream.conf:/etc/nginx/conf.d/study-room-upstream.conf:ro
     depends_on:
       api-1:
         condition: service_healthy
       api-2:
         condition: service_healthy
     restart: unless-stopped
+
+  proxy-test:
+    profiles: ["test"]
+    image: nginx:1.27-alpine
+    volumes:
+      - ./deploy/nginx-e2e.test.conf:/etc/nginx/nginx.conf:ro
+    networks:
+      default:
+        aliases:
+          - api-1-proxy
+          - api-2-proxy
+    depends_on:
+      api-1:
+        condition: service_healthy
+      api-2:
+        condition: service_healthy
+    restart: "no"
 
   postgres:
     image: postgres:16-alpine
@@ -109,6 +134,16 @@ services:
       retries: 12
     restart: unless-stopped
 
+  otel:
+    profiles: ["test"]
+    image: otel/opentelemetry-collector-contrib:0.158.0
+    user: "0:0"
+    command: ["--config=/etc/otelcol-contrib/config.yml"]
+    volumes:
+      - ./deploy/otel-collector.test.yml:/etc/otelcol-contrib/config.yml:ro
+      - study_room_otel:/var/lib/otel
+    restart: "no"
+
   jwks:
     profiles: ["dev", "test"]
     image: node:22-alpine
@@ -130,9 +165,7 @@ services:
 
   e2e:
     profiles: ["test"]
-    build:
-      context: .
-      dockerfile: server/Dockerfile
+    image: ${STUDY_ROOM_SERVER_IMAGE:-study-room-server:0.4.0-rc.1}
     user: "0:0"
     environment:
       E2E_API_1: http://api-1:3000
@@ -142,7 +175,9 @@ services:
       E2E_RUN_ID: ${E2E_RUN_ID:-local}
       E2E_STATE_PATH: /state/persistence.json
       E2E_JWKS_RETIRE_WAIT_MS: ${E2E_JWKS_RETIRE_WAIT_MS:-302000}
-      E2E_PRESENCE_EXPIRE_WAIT_MS: ${E2E_PRESENCE_EXPIRE_WAIT_MS:-62000}
+      E2E_PRESENCE_EXPIRE_WAIT_MS: ${E2E_PRESENCE_EXPIRE_WAIT_MS:-122000}
+      STUDY_ROOM_PRESENCE_TTL_SECONDS: ${STUDY_ROOM_PRESENCE_TTL_SECONDS:-60}
+      STUDY_ROOM_PRESENCE_REFRESH_SECONDS: ${STUDY_ROOM_PRESENCE_REFRESH_SECONDS:-20}
       STUDY_ROOM_IP_RATE_LIMIT: ${STUDY_ROOM_IP_RATE_LIMIT:-120}
       DATABASE_URL: postgresql://${POSTGRES_USER:-study_room}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-study_room}
       REDIS_URL: redis://redis:6379
@@ -160,3 +195,4 @@ volumes:
   study_room_postgres:
   study_room_redis:
   study_room_e2e_state:
+  study_room_otel:

@@ -56,8 +56,6 @@ async function bootstrap() {
     forbidNonWhitelisted: true,
     stopAtFirstError: false,
   }));
-  app.enableShutdownHooks();
-
   const candidates = [
     resolve(process.cwd(), 'contracts', 'openapi.yaml'),
     resolve(process.cwd(), '..', 'contracts', 'openapi.yaml'),
@@ -70,12 +68,26 @@ async function bootstrap() {
 
   const port = Number(process.env.PORT ?? 3000);
   await app.listen(port);
-  const shutdown = async () => {
-    await app.close();
-    await stopTelemetry();
+  let shutdownPromise: Promise<void> | undefined;
+  const shutdown = (signal: NodeJS.Signals) => {
+    if (shutdownPromise) return shutdownPromise;
+    shutdownPromise = (async () => {
+      console.log(`Received ${signal}; shutting down Study Room API`);
+      await app.close();
+      await stopTelemetry();
+      console.log('Study Room API shutdown complete');
+    })().catch((error: unknown) => {
+      console.error('Study Room API shutdown failed', error);
+      process.exitCode = 1;
+    });
+    return shutdownPromise;
   };
-  process.once('SIGTERM', () => void shutdown());
-  process.once('SIGINT', () => void shutdown());
+  process.once('SIGTERM', () => void shutdown('SIGTERM'));
+  process.once('SIGINT', () => void shutdown('SIGINT'));
 }
 
-void bootstrap();
+void bootstrap().catch(async (error: unknown) => {
+  console.error('Study Room API startup failed', error);
+  await stopTelemetry().catch(() => undefined);
+  process.exitCode = 1;
+});

@@ -12,6 +12,11 @@ import {
   runId,
   token,
 } from './e2e-support.mjs';
+import { mkdir, writeFile } from 'node:fs/promises';
+import { dirname } from 'node:path';
+
+const resultPath = process.env.E2E_RESULT_PATH;
+const startedAt = Date.now();
 
 const ownerId = `flow-owner-${runId}`;
 const memberId = `flow-member-${runId}`;
@@ -76,31 +81,40 @@ try {
     sub: duplicateApplicantId,
     displayName: 'Duplicate Applicant',
   });
+  let duplicateCreatedEventCount = 0;
+  const countDuplicateCreatedEvents = (event) => {
+    if (event.type === 'join-request.created' && event.payload?.userId === duplicateApplicantId) {
+      duplicateCreatedEventCount += 1;
+    }
+  };
+  ownerSocket.on('study-room.event', countDuplicateCreatedEvents);
   const createdRequestEvent = nextEvent(
     ownerSocket,
     (event) => event.type === 'join-request.created'
       && event.payload?.userId === duplicateApplicantId,
   );
-  const firstDuplicateRequest = await request(
-    api1,
-    duplicateApplicantToken,
-    'POST',
-    `/v1/rooms/${room.id}/join-requests`,
-  );
+  const [firstDuplicateRequest, repeatedRequest] = await Promise.all([
+    request(
+      api1,
+      duplicateApplicantToken,
+      'POST',
+      `/v1/rooms/${room.id}/join-requests`,
+    ),
+    request(
+      api2,
+      duplicateApplicantToken,
+      'POST',
+      `/v1/rooms/${room.id}/join-requests`,
+    ),
+  ]);
   await createdRequestEvent;
-  const duplicateEventGuard = expectNoEvent(
-    ownerSocket,
-    (event) => event.type === 'join-request.created'
-      && event.payload?.userId === duplicateApplicantId,
-  );
-  const repeatedRequest = await request(
-    api2,
-    duplicateApplicantToken,
-    'POST',
-    `/v1/rooms/${room.id}/join-requests`,
-  );
   assert(repeatedRequest.id === firstDuplicateRequest.id, 'Repeated join request returned a different request');
-  await duplicateEventGuard;
+  await delay(1_000);
+  ownerSocket.off('study-room.event', countDuplicateCreatedEvents);
+  assert(
+    duplicateCreatedEventCount === 1,
+    `Concurrent join request emitted ${duplicateCreatedEventCount} created events`,
+  );
 
   const chatText = `cross-instance-${runId}`;
   const chatEvent = nextEvent(
@@ -109,6 +123,14 @@ try {
   );
   await request(api1, ownerToken, 'POST', `/v1/rooms/${room.id}/messages`, { text: chatText });
   await chatEvent;
+
+  const memberChatText = `member-to-owner-${runId}`;
+  const memberChatEvent = nextEvent(
+    ownerSocket,
+    (event) => event.type === 'chat.message.created' && event.payload?.text === memberChatText,
+  );
+  await request(api2, memberToken, 'POST', `/v1/rooms/${room.id}/messages`, { text: memberChatText });
+  await memberChatEvent;
 
   const focusing = nextEvent(
     ownerSocket,
@@ -148,6 +170,15 @@ try {
   await ack(pausedSessionSocket, 'room.subscribe', { roomId: room.id });
   await idleAfterSubscribe;
 
+  const resumed = nextEvent(
+    ownerSocket,
+    (event) => event.type === 'member.presence.updated'
+      && event.payload?.id === memberId
+      && event.payload?.status === 'focusing',
+  );
+  await request(api1, memberToken, 'PATCH', `/v1/sessions/${session.id}`, { status: 'running' });
+  await resumed;
+
   const online = nextEvent(
     ownerSocket,
     (event) => event.type === 'member.presence.updated'
@@ -156,6 +187,20 @@ try {
   );
   await request(api2, memberToken, 'PATCH', `/v1/sessions/${session.id}`, { status: 'finished' });
   await online;
+
+  const concurrentStarts = await Promise.all([api1, api2].map((base) => fetch(
+    `${base}/v1/rooms/${room.id}/sessions`,
+    { method: 'POST', headers: { authorization: `Bearer ${memberToken}` } },
+  )));
+  const concurrentStatuses = concurrentStarts.map((response) => response.status).sort((a, b) => a - b);
+  assert(
+    concurrentStatuses[0] === 201 && concurrentStatuses[1] === 409,
+    `Concurrent session start statuses were ${concurrentStatuses.join(', ')}, expected 201 and 409`,
+  );
+  const successfulStart = concurrentStarts.find((response) => response.status === 201);
+  assert(successfulStart, 'Concurrent session start did not return a successful response');
+  const concurrentSession = await successfulStart.json();
+  await request(api1, memberToken, 'PATCH', `/v1/sessions/${concurrentSession.id}`, { status: 'finished' });
 
   await ack(memberSocket, 'presence.set-away', { roomId: room.id, away: true });
   await ack(runningSessionSocket, 'presence.set-away', { roomId: room.id, away: true });
@@ -205,7 +250,88 @@ try {
   ));
   await request(api1, ownerToken, 'POST', `/v1/rooms/${room.id}/messages`, { text: afterEviction });
   await Promise.all(noRoomEvents);
-  console.log('Two-instance approval, chat, authoritative presence, session, and eviction E2E passed.');
+
+  await request(api2, memberToken, 'POST', `/v1/rooms/${room.id}/join-requests`);
+  let pendingAgain = await request(api1, ownerToken, 'GET', `/v1/rooms/${room.id}/join-requests?limit=100`);
+  let memberRequest = pendingAgain.items.find((item) => item.userId === memberId);
+  assert(memberRequest, 'Removed member could not request access again');
+  await request(
+    api1,
+    ownerToken,
+    'PATCH',
+    `/v1/rooms/${room.id}/join-requests/${memberRequest.id}`,
+    { decision: 'approved' },
+  );
+  await ack(memberSocket, 'room.subscribe', { roomId: room.id });
+
+  const left = nextEvent(
+    memberSocket,
+    (event) => event.type === 'membership.updated'
+      && event.roomId === room.id
+      && event.payload?.active === false,
+  );
+  await request(api2, memberToken, 'DELETE', `/v1/rooms/${room.id}/members/me`);
+  await left;
+  await request(api1, memberToken, 'GET', `/v1/rooms/${room.id}`, undefined, [403]);
+
+  await request(api1, memberToken, 'POST', `/v1/rooms/${room.id}/join-requests`);
+  pendingAgain = await request(api2, ownerToken, 'GET', `/v1/rooms/${room.id}/join-requests?limit=100`);
+  memberRequest = pendingAgain.items.find((item) => item.userId === memberId);
+  assert(memberRequest, 'Member could not request access after leaving');
+  await request(
+    api2,
+    ownerToken,
+    'PATCH',
+    `/v1/rooms/${room.id}/join-requests/${memberRequest.id}`,
+    { decision: 'approved' },
+  );
+  await ack(memberSocket, 'room.subscribe', { roomId: room.id });
+
+  const transferred = await request(
+    api1,
+    ownerToken,
+    'PUT',
+    `/v1/rooms/${room.id}/owner`,
+    { userId: memberId },
+  );
+  assert(
+    transferred.members.some((member) => member.id === memberId && member.role === 'owner'),
+    'Ownership transfer did not promote the member',
+  );
+  await request(api2, ownerToken, 'DELETE', `/v1/rooms/${room.id}/members/me`);
+  await request(api1, ownerToken, 'GET', `/v1/rooms/${room.id}`, undefined, [403]);
+
+  const deleted = nextEvent(
+    memberSocket,
+    (event) => event.type === 'membership.updated'
+      && event.roomId === room.id
+      && event.payload?.active === false,
+  );
+  await request(api1, memberToken, 'DELETE', `/v1/rooms/${room.id}`);
+  await deleted;
+  await request(api2, memberToken, 'GET', `/v1/rooms/${room.id}`, undefined, [403, 404]);
+
+  const result = {
+    scenario: 'two-instance-complete-lifecycle',
+    passed: true,
+    startedAt: new Date(startedAt).toISOString(),
+    endedAt: new Date().toISOString(),
+    durationMs: Date.now() - startedAt,
+    roomId: room.id,
+    concurrentJoinRequestId: firstDuplicateRequest.id,
+    concurrentSessionStatuses: concurrentStatuses,
+    lifecycle: [
+      'created', 'requested', 'approved', 'subscribed', 'chat-bidirectional',
+      'session-started', 'session-paused', 'session-resumed', 'session-finished',
+      'presence-away', 'removed', 'reapproved', 'left', 'rejoined',
+      'ownership-transferred', 'former-owner-left', 'deleted',
+    ],
+  };
+  if (resultPath) {
+    await mkdir(dirname(resultPath), { recursive: true });
+    await writeFile(resultPath, `${JSON.stringify(result, null, 2)}\n`);
+  }
+  console.log('Two-instance complete membership, chat, session, presence, ownership, and deletion flow passed.');
 } finally {
   ownerSocket.close();
   memberSocket.close();

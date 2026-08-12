@@ -1,20 +1,28 @@
-import 'dart:async';
-
 import 'package:flutter/material.dart';
 import 'package:study_room_sdk/study_room_sdk.dart';
 import 'package:study_room_ui/study_room_ui.dart';
 
 import 'l10n/generated/study_room_example_localizations.dart';
+import 'live_workflow_controller.dart';
+import 'live_workflow_page.dart';
 
 void main() {
   runApp(const StudyRoomExampleApp());
 }
 
 class StudyRoomExampleApp extends StatelessWidget {
-  const StudyRoomExampleApp({this.background, this.locale, super.key});
+  const StudyRoomExampleApp({
+    this.background,
+    this.locale,
+    this.workflowController,
+    this.autoConnect = true,
+    super.key,
+  });
 
   final StudyBackground? background;
   final Locale? locale;
+  final LiveWorkflowController? workflowController;
+  final bool autoConnect;
 
   @override
   Widget build(BuildContext context) {
@@ -30,21 +38,31 @@ class StudyRoomExampleApp extends StatelessWidget {
         colorSchemeSeed: const Color(0xFF2563EB),
         useMaterial3: true,
       ),
-      home: StudyRoomExampleHome(background: background),
+      home: Builder(
+        builder: (context) => LiveWorkflowPage(
+          controller: workflowController,
+          autoConnect: autoConnect,
+          onOpenOffline: () => Navigator.of(context).push(
+            MaterialPageRoute<void>(
+              builder: (_) => OfflineFocusDemo(background: background),
+            ),
+          ),
+        ),
+      ),
     );
   }
 }
 
-class StudyRoomExampleHome extends StatefulWidget {
-  const StudyRoomExampleHome({this.background, super.key});
+class OfflineFocusDemo extends StatefulWidget {
+  const OfflineFocusDemo({this.background, super.key});
 
   final StudyBackground? background;
 
   @override
-  State<StudyRoomExampleHome> createState() => _StudyRoomExampleHomeState();
+  State<OfflineFocusDemo> createState() => _OfflineFocusDemoState();
 }
 
-class _StudyRoomExampleHomeState extends State<StudyRoomExampleHome> {
+class _OfflineFocusDemoState extends State<OfflineFocusDemo> {
   var _style = StudyFocusVisualStyle.immersiveDock;
   final _store = MemoryStudyStore();
 
@@ -129,19 +147,13 @@ class _StudyRoomExampleHomeState extends State<StudyRoomExampleHome> {
                 alignment: Alignment.topLeft,
                 child: Padding(
                   padding: const EdgeInsets.all(12),
-                  child: Semantics(
-                    button: true,
-                    label: localizations.openRoomWorkflow,
-                    child: IconButton.filledTonal(
-                      key: const Key('open_room_workflow'),
-                      tooltip: localizations.rooms,
-                      onPressed: () => Navigator.of(context).push(
-                        MaterialPageRoute<void>(
-                          builder: (_) => const LiveStudyRoomManagementPage(),
-                        ),
-                      ),
-                      icon: const Icon(Icons.groups_2_outlined),
-                    ),
+                  child: IconButton.filledTonal(
+                    key: const Key('close_offline_focus'),
+                    tooltip: MaterialLocalizations.of(
+                      context,
+                    ).backButtonTooltip,
+                    onPressed: () => Navigator.of(context).pop(),
+                    icon: const Icon(Icons.arrow_back),
                   ),
                 ),
               ),
@@ -177,144 +189,6 @@ class _StudyRoomExampleHomeState extends State<StudyRoomExampleHome> {
       ),
       shape: WidgetStatePropertyAll(
         RoundedRectangleBorder(borderRadius: BorderRadius.circular(999)),
-      ),
-    );
-  }
-}
-
-class LiveStudyRoomManagementPage extends StatefulWidget {
-  const LiveStudyRoomManagementPage({super.key});
-
-  @override
-  State<LiveStudyRoomManagementPage> createState() =>
-      _LiveStudyRoomManagementPageState();
-}
-
-class _LiveStudyRoomManagementPageState
-    extends State<LiveStudyRoomManagementPage> {
-  static const _apiUrl = String.fromEnvironment('STUDY_ROOM_API_URL');
-  static const _realtimeUrl = String.fromEnvironment('STUDY_ROOM_REALTIME_URL');
-  static const _token = String.fromEnvironment('STUDY_ROOM_TOKEN');
-  static const _expiresAtUnix = int.fromEnvironment(
-    'STUDY_ROOM_TOKEN_EXPIRES_AT',
-  );
-  static const _userId = String.fromEnvironment(
-    'STUDY_ROOM_USER_ID',
-    defaultValue: 'demo-user',
-  );
-
-  StudyRoomSdk? _sdk;
-  Future<void>? _started;
-
-  @override
-  void initState() {
-    super.initState();
-    if (_apiUrl.isNotEmpty && _realtimeUrl.isNotEmpty && _token.isNotEmpty) {
-      _sdk = StudyRoomSdk(
-        StudyRoomSdkConfig(
-          apiBaseUri: Uri.parse(_apiUrl),
-          realtimeUri: Uri.parse(_realtimeUrl),
-          tokenProvider: (_) async => StudyRoomAccessToken(
-            value: _token,
-            expiresAt: _expiresAtUnix > 0
-                ? DateTime.fromMillisecondsSinceEpoch(
-                    _expiresAtUnix * 1000,
-                    isUtc: true,
-                  )
-                : DateTime.now().add(const Duration(minutes: 10)),
-          ),
-        ),
-      );
-      _started = _sdk!.start();
-    }
-  }
-
-  @override
-  void dispose() {
-    final sdk = _sdk;
-    if (sdk != null) unawaited(sdk.close());
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final localizations = StudyRoomExampleLocalizations.of(context);
-    return Scaffold(
-      appBar: AppBar(title: Text(localizations.workflowTitle)),
-      body: _sdk == null
-          ? Padding(
-              padding: const EdgeInsets.all(24),
-              child: SelectableText(localizations.configurationInstructions),
-            )
-          : FutureBuilder<void>(
-              future: _started,
-              builder: (context, snapshot) {
-                if (snapshot.hasError) {
-                  debugPrint(
-                    'Study room example startup failed: ${snapshot.error}\n'
-                    '${snapshot.stackTrace}',
-                  );
-                  return Center(
-                    child: SelectableText(localizations.startupFailed),
-                  );
-                }
-                if (snapshot.connectionState != ConnectionState.done) {
-                  return const Center(child: CircularProgressIndicator());
-                }
-                return StudyRoomLobbyView(
-                  sdk: _sdk!,
-                  currentUserId: _userId,
-                  onRoomSelected: (room) => Navigator.of(context).push(
-                    MaterialPageRoute<void>(
-                      builder: (_) => _RoomAdministrationPage(
-                        sdk: _sdk!,
-                        room: room,
-                        currentUserId: _userId,
-                      ),
-                    ),
-                  ),
-                );
-              },
-            ),
-    );
-  }
-}
-
-class _RoomAdministrationPage extends StatelessWidget {
-  const _RoomAdministrationPage({
-    required this.sdk,
-    required this.room,
-    required this.currentUserId,
-  });
-  final StudyRoomSdk sdk;
-  final StudyRoom room;
-  final String currentUserId;
-
-  @override
-  Widget build(BuildContext context) {
-    final localizations = StudyRoomExampleLocalizations.of(context);
-    return DefaultTabController(
-      length: 2,
-      child: Scaffold(
-        appBar: AppBar(
-          title: Text(room.title),
-          bottom: TabBar(
-            tabs: [
-              Tab(text: localizations.membersTab),
-              Tab(text: localizations.requestsTab),
-            ],
-          ),
-        ),
-        body: TabBarView(
-          children: [
-            RoomMemberManagementView(
-              sdk: sdk,
-              room: room,
-              currentUserId: currentUserId,
-            ),
-            JoinRequestInboxView(sdk: sdk, roomId: room.id),
-          ],
-        ),
       ),
     );
   }

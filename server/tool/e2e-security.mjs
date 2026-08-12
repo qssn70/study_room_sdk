@@ -1,15 +1,22 @@
 import {
+  ack,
   api1,
   api2,
   assert,
   connect,
   delay,
+  expectNoEvent,
   fixtureControl,
   request,
   runId,
   socketDisconnect,
   token,
 } from './e2e-support.mjs';
+import { mkdir, writeFile } from 'node:fs/promises';
+import { dirname } from 'node:path';
+
+const resultPath = process.env.E2E_RESULT_PATH;
+const startedAt = Date.now();
 
 const adminToken = await token({ type: 'admin', sub: `admin-${runId}` });
 const alternateApp = {
@@ -50,6 +57,51 @@ const alternateToken = await token({
 });
 const primaryRoom = await request(api1, primaryToken, 'POST', '/v1/rooms', { title: `Tenant isolation ${runId}` });
 await request(api2, alternateToken, 'GET', `/v1/rooms/${primaryRoom.id}`, undefined, [403]);
+await request(
+  api2,
+  alternateToken,
+  'POST',
+  `/v1/rooms/${primaryRoom.id}/messages`,
+  { text: 'cross-tenant-write-must-fail' },
+  [403],
+);
+const crossTenantJoin = await fetch(`${api1}/v1/rooms/${primaryRoom.id}/join-requests`, {
+  method: 'POST',
+  headers: { authorization: `Bearer ${alternateToken}` },
+});
+assert(
+  [403, 404].includes(crossTenantJoin.status),
+  `Cross-tenant join request returned ${crossTenantJoin.status}`,
+);
+
+const isolationSocket = await connect(api2, alternateToken);
+try {
+  const rejectedSubscription = await ack(
+    isolationSocket,
+    'room.subscribe',
+    { roomId: primaryRoom.id },
+    false,
+  );
+  assert(
+    rejectedSubscription.error?.code === 'membership_required',
+    'Cross-tenant WebSocket subscription returned an unexpected error',
+  );
+  const isolatedEvent = `tenant-isolation-${runId}`;
+  const noLeak = expectNoEvent(
+    isolationSocket,
+    (event) => event.roomId === primaryRoom.id || event.payload?.text === isolatedEvent,
+  );
+  await request(
+    api1,
+    primaryToken,
+    'POST',
+    `/v1/rooms/${primaryRoom.id}/messages`,
+    { text: isolatedEvent },
+  );
+  await noLeak;
+} finally {
+  isolationSocket.close();
+}
 
 const expiring = await token({
   sub: primaryId,
@@ -95,4 +147,25 @@ try {
   await request(api1, adminToken, 'PATCH', '/admin/v1/apps/demo-alt', { enabled: true });
 }
 
-console.log('Issuer, audience, appId, kid, expiry, scope, rotation, tenant isolation, and disable E2E passed.');
+const result = {
+  scenario: 'authentication-and-tenant-isolation',
+  passed: true,
+  startedAt: new Date(startedAt).toISOString(),
+  endedAt: new Date().toISOString(),
+  durationMs: Date.now() - startedAt,
+  invalidTokenScenarios: invalidScenarios,
+  tenantIsolation: {
+    restReadDenied: true,
+    restWriteDenied: true,
+    joinRequestStatus: crossTenantJoin.status,
+    websocketSubscriptionDenied: true,
+    websocketEventLeak: false,
+  },
+  keyRotation: true,
+  applicationDisableDisconnect: true,
+};
+if (resultPath) {
+  await mkdir(dirname(resultPath), { recursive: true });
+  await writeFile(resultPath, `${JSON.stringify(result, null, 2)}\n`);
+}
+console.log('Issuer, audience, appId, kid, expiry, scope, rotation, REST/WebSocket tenant isolation, and disable E2E passed.');

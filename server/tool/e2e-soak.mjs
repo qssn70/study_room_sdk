@@ -2,16 +2,18 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { createClient } from 'redis';
 import { io } from 'socket.io-client';
-import { api1, api2, assert, delay, jwks, runId, token } from './e2e-support.mjs';
+import { assert, delay, jwks, runId, token } from './e2e-support.mjs';
 
 const proxy = process.env.E2E_PROXY ?? 'http://proxy:8080';
 const durationMs = Number(process.env.E2E_SOAK_DURATION_MS ?? 600_000);
 const intervalMs = Number(process.env.E2E_SOAK_INTERVAL_MS ?? 1_000);
 const expectedReconnects = Number(process.env.E2E_EXPECTED_RECONNECTS ?? 2);
+const proxyApi1 = process.env.E2E_PROXY_API_1 ?? 'http://api-1-proxy:8080';
+const proxyApi2 = process.env.E2E_PROXY_API_2 ?? 'http://api-2-proxy:8080';
 const resultPath = process.env.E2E_RESULT_PATH;
+const reconnectKey = `e2e:soak:${runId}:reconnects`;
 assert(Number.isSafeInteger(expectedReconnects) && expectedReconnects >= 0, 'E2E_EXPECTED_RECONNECTS must be a non-negative integer');
 const redis = createClient({ url: process.env.REDIS_URL ?? 'redis://redis:6379' });
-redis.on('error', (error) => console.error(`Soak Redis error: ${error.message}`));
 
 let httpRequests = 0;
 let httpRetries = 0;
@@ -23,12 +25,17 @@ let socketDisconnects = 0;
 let socketConnectErrors = 0;
 let socketSubscriptions = 0;
 let socketSubscriptionFailures = 0;
+const reconnectMilestones = [];
 let iterations = 0;
 let failure;
 let room;
 const sockets = [];
 const processStartedAt = Date.now();
 let workloadStartedAt;
+redis.on('error', (error) => {
+  console.error(`Soak Redis error: ${error.message}`);
+  failure ??= `Soak Redis error: ${error.message}`;
+});
 
 async function apiRequest(accessToken, method, path, body) {
   let lastError;
@@ -76,29 +83,50 @@ function connectResilient(base, accessToken) {
     socket.on('connect', () => {
       const reconnect = connectionCount > 0;
       connectionCount += 1;
-      socket.timeout(5_000).emit('room.subscribe', { roomId: room.id }, (error, value) => {
-        if (error || value?.ok !== true) {
-          const subscriptionError = error ?? new Error(
-            `room.subscribe rejected through ${base}: ${JSON.stringify(value)}`,
-          );
-          socketSubscriptionFailures += 1;
+      socket.timeout(5_000).emit('room.subscribe', { roomId: room.id }, async (error, value) => {
+        try {
+          if (error || value?.ok !== true) {
+            const subscriptionError = error ?? new Error(
+              `room.subscribe rejected through ${base}: ${JSON.stringify(value)}`,
+            );
+            socketSubscriptionFailures += 1;
+            if (!initialSettled) {
+              initialSettled = true;
+              clearTimeout(timer);
+              reject(subscriptionError);
+            } else if (!failure) {
+              failure = subscriptionError instanceof Error
+                ? subscriptionError.message
+                : String(subscriptionError);
+            }
+            return;
+          }
+          socketSubscriptions += 1;
+          if (reconnect) {
+            socketReconnects += 1;
+            const aggregateCount = await redis.incr(reconnectKey);
+            reconnectMilestones.push({
+              count: socketReconnects,
+              aggregateCount,
+              at: new Date().toISOString(),
+            });
+          }
+          if (initialSettled) return;
+          initialSettled = true;
+          clearTimeout(timer);
+          resolve();
+        } catch (callbackError) {
+          const callbackFailure = callbackError instanceof Error
+            ? callbackError
+            : new Error(String(callbackError));
           if (!initialSettled) {
             initialSettled = true;
             clearTimeout(timer);
-            reject(subscriptionError);
+            reject(callbackFailure);
           } else if (!failure) {
-            failure = subscriptionError instanceof Error
-              ? subscriptionError.message
-              : String(subscriptionError);
+            failure = callbackFailure.message;
           }
-          return;
         }
-        socketSubscriptions += 1;
-        if (reconnect) socketReconnects += 1;
-        if (initialSettled) return;
-        initialSettled = true;
-        clearTimeout(timer);
-        resolve();
       });
     });
   });
@@ -128,10 +156,9 @@ try {
   const ownerToken = await token({ sub: `soak-owner-${runId}`, displayName: 'Soak Owner' });
   room = await apiRequest(ownerToken, 'POST', '/v1/rooms', { title: `Soak ${runId}` });
   await redis.connect();
-  await Promise.all([
-    connectResilient(api1, ownerToken),
-    connectResilient(api2, ownerToken),
-  ]);
+  await redis.set(reconnectKey, '0', { PX: durationMs + 120_000 });
+  await connectResilient(proxyApi1, ownerToken);
+  await connectResilient(proxyApi2, ownerToken);
   workloadStartedAt = Date.now();
   await redis.set(`e2e:soak:${runId}`, room.id, { PX: durationMs + 120_000 });
   console.log(`Soak workload ready for rolling restarts; fixture=${jwks} room=${room.id}`);
@@ -177,12 +204,14 @@ try {
 } finally {
   for (const socket of sockets) socket.close();
   if (redis.isOpen) {
-    await redis.del(`e2e:soak:${runId}`).catch(() => undefined);
+    await redis.del([`e2e:soak:${runId}`, reconnectKey]).catch(() => undefined);
     await redis.quit();
   }
   const result = {
     scenario: 'mixed-http-websocket-soak',
     passed: failure === undefined,
+    startedAt: new Date(workloadStartedAt ?? processStartedAt).toISOString(),
+    endedAt: new Date().toISOString(),
     durationMs: Date.now() - (workloadStartedAt ?? processStartedAt),
     iterations,
     httpRequests,
@@ -196,11 +225,12 @@ try {
     socketConnectErrors,
     socketSubscriptions,
     socketSubscriptionFailures,
+    reconnectMilestones,
     failure: failure ?? null,
   };
   if (resultPath) {
     await mkdir(dirname(resultPath), { recursive: true });
-    await writeFile(resultPath, JSON.stringify(result, null, 2));
+    await writeFile(resultPath, `${JSON.stringify(result, null, 2)}\n`);
   }
 }
 

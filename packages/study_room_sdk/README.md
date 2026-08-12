@@ -8,7 +8,7 @@ final sdk = StudyRoomSdk(
     apiBaseUri: Uri.parse('https://study.example.com'),
     realtimeUri: Uri.parse('wss://study.example.com/v1/realtime'),
     tokenProvider: (request) async => StudyRoomAccessToken(
-      value: await tokenService.value(forceRefresh: request.forceRefresh),
+      token: await tokenService.issueToken(forceRefresh: request.forceRefresh),
       expiresAt: await tokenService.expiresAt(),
     ),
   ),

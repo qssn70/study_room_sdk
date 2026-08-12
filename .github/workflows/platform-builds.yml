@@ -110,28 +110,41 @@ jobs:
             throw "Packaged release artifact was not created: $packagedPath"
           }
           $relativePackagedPath = [IO.Path]::GetRelativePath($workspace, $packagedPath).Replace('\', '/')
+          $artifactRelativePath = [IO.Path]::GetRelativePath(
+            (Join-Path $workspace 'artifacts'),
+            $packagedPath
+          ).Replace('\', '/')
           "PACKAGED_ARTIFACT_PATH=$relativePackagedPath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "ARTIFACT_RELATIVE_PATH=$artifactRelativePath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
       - name: Generate release evidence manifest
         shell: pwsh
         run: |
           $workspace = [IO.Path]::GetFullPath($env:GITHUB_WORKSPACE)
-          $relativeArtifactPath = $env:PACKAGED_ARTIFACT_PATH
-          $artifactPath = [IO.Path]::GetFullPath((Join-Path $workspace $relativeArtifactPath))
+          $workspaceRelativePath = $env:PACKAGED_ARTIFACT_PATH
+          $artifactRelativePath = $env:ARTIFACT_RELATIVE_PATH
+          $artifactPath = [IO.Path]::GetFullPath((Join-Path $workspace $workspaceRelativePath))
           if (Test-Path -LiteralPath $artifactPath -PathType Leaf) {
             $files = @(Get-Item -LiteralPath $artifactPath)
           } elseif (Test-Path -LiteralPath $artifactPath -PathType Container) {
             $files = @(Get-ChildItem -LiteralPath $artifactPath -File -Recurse)
           } else {
-            throw "Release artifact was not found: $relativeArtifactPath"
+            throw "Release artifact was not found: $workspaceRelativePath"
           }
           if ($files.Count -eq 0) {
-            throw "Release artifact contains no files: $relativeArtifactPath"
+            throw "Release artifact contains no files: $workspaceRelativePath"
           }
 
           $entries = @(
             foreach ($file in ($files | Sort-Object FullName)) {
               [ordered]@{
-                path = [IO.Path]::GetRelativePath($workspace, $file.FullName).Replace('\', '/')
+                path = if ($files.Count -eq 1) {
+                  $artifactRelativePath
+                } else {
+                  [IO.Path]::GetRelativePath(
+                    (Join-Path $workspace 'artifacts'),
+                    $file.FullName
+                  ).Replace('\', '/')
+                }
                 sizeBytes = [int64]$file.Length
                 sha256 = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
               }
@@ -149,7 +162,7 @@ jobs:
             startedAtUtc = $startedAt.ToString('o')
             endedAtUtc = $endedAt.ToString('o')
             durationSeconds = [math]::Round(($endedAt - $startedAt).TotalSeconds, 3)
-            artifactRoot = $relativeArtifactPath.Replace('\', '/')
+            artifactRoot = $artifactRelativePath
             totalSizeBytes = [int64](($entries | Measure-Object -Property sizeBytes -Sum).Sum)
             files = $entries
           }
@@ -165,5 +178,6 @@ jobs:
           path: |
             artifacts/releases/**
             artifacts/manifests/${{ matrix.target }}.json
+          overwrite: true
           if-no-files-found: error
           retention-days: 30

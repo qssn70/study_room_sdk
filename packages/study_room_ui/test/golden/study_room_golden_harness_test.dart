@@ -76,10 +76,7 @@ void main() {
     expect(find.byType(ErrorWidget), findsNothing);
     expect(find.text('Focus Room'), findsOneWidget);
     expect(find.text('No requests'), findsOneWidget);
-    expect(
-      tester.widget<Text>(find.text('No requests')).style,
-      isNotNull,
-    );
+    expect(tester.widget<Text>(find.text('No requests')).style, isNotNull);
     expect(
       tester.binding.renderViews.single.toStringDeep(),
       isNot(contains('OVERFLOWING')),
@@ -212,7 +209,7 @@ StudyRoomSdk _goldenSdk() => StudyRoomSdk(
     apiBaseUri: Uri.parse('https://example.com'),
     realtimeUri: Uri.parse('wss://example.com/v1/realtime'),
     tokenProvider: (_) async => StudyRoomAccessToken(
-      value: 'golden-token',
+      token: 'golden-token',
       expiresAt: DateTime.utc(2100),
     ),
     transport: _GoldenTransport(),

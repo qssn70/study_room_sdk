@@ -34,6 +34,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - run: mkdir -p artifacts/ci
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -59,14 +60,34 @@ jobs:
               packages/study_room_sdk/lib/src/generated_contract.dart
             exit 1
           fi
-      - run: npm run build
-      - run: npm --workspace study-room-server run test:coverage
-      - run: npm audit --audit-level=high
+          node -e "require('fs').writeFileSync('artifacts/ci/contracts.json', JSON.stringify({schemaVersion:1,commitSha:process.env.GITHUB_SHA,generatedDiff:false}, null, 2) + '\n')"
+      - name: Build server
+        run: npm run build
+      - name: Test release evidence tooling
+        run: npm run test:release-tools
+      - name: Test server with line and branch coverage
+        run: npm --workspace study-room-server run test:coverage
+      - name: Enforce server line and branch coverage thresholds
+        run: node tool/check-lcov.mjs server/coverage/lcov.info 80 80 --output artifacts/ci/server-coverage.json
+      - name: Audit npm dependencies
+        shell: bash
+        run: |
+          set -o pipefail
+          npm audit --audit-level=high --json | tee artifacts/ci/npm-audit.json
+      - name: Upload server CI evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-server-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/ci
+          if-no-files-found: error
+          retention-days: 30
 
   flutter:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - run: mkdir -p artifacts/ci
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -103,25 +124,66 @@ jobs:
       - name: Test SDK with line and branch coverage
         working-directory: packages/study_room_sdk
         run: dart test --coverage-path=coverage/lcov.info --branch-coverage
-      - run: node tool/check-lcov.mjs packages/study_room_sdk/coverage/lcov.info 80 80
+      - name: Enforce SDK line and branch coverage thresholds
+        run: node tool/check-lcov.mjs packages/study_room_sdk/coverage/lcov.info 80 80 --output artifacts/ci/sdk-coverage.json
       - name: Test UI with line coverage
         working-directory: packages/study_room_ui
         run: flutter test --coverage
-      - run: node tool/check-lcov.mjs packages/study_room_ui/coverage/lcov.info 70
+      - name: Enforce UI line coverage threshold
+        run: node tool/check-lcov.mjs packages/study_room_ui/coverage/lcov.info 70 --output artifacts/ci/ui-coverage.json
       - name: Test example
         working-directory: apps/example_flutter
         run: flutter test
       - name: Package publication checks
+        shell: bash
         run: |
-          (cd packages/study_room_sdk && dart pub publish --dry-run)
-          (cd packages/study_room_ui && flutter pub publish --dry-run)
+          set -euo pipefail
+          (cd packages/study_room_sdk && dart pub publish --dry-run) 2>&1 | tee artifacts/ci/sdk-publish-dry-run.log
+          (cd packages/study_room_ui && flutter pub publish --dry-run) 2>&1 | tee artifacts/ci/ui-publish-dry-run.log
+          node - <<'NODE'
+          const { writeFileSync } = require('node:fs');
+          for (const name of [
+            'GITHUB_SHA',
+            'GITHUB_SERVER_URL',
+            'GITHUB_REPOSITORY',
+            'GITHUB_RUN_ID',
+            'GITHUB_RUN_ATTEMPT',
+          ]) {
+            if (!process.env[name]) throw new Error(`${name} is required for publish dry-run evidence`);
+          }
+          const runUrl = `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`;
+          const result = {
+            schemaVersion: 1,
+            commitSha: process.env.GITHUB_SHA,
+            runUrl,
+            runId: process.env.GITHUB_RUN_ID,
+            runAttempt: process.env.GITHUB_RUN_ATTEMPT,
+            packages: {
+              study_room_sdk: { passed: true, log: 'sdk-publish-dry-run.log' },
+              study_room_ui: { passed: true, log: 'ui-publish-dry-run.log' },
+            },
+            passed: true,
+          };
+          writeFileSync('artifacts/ci/publish-dry-run.json', `${JSON.stringify(result, null, 2)}\n`);
+          NODE
+      - name: Upload Flutter CI evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-flutter-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/ci
+          if-no-files-found: error
+          retention-days: 30
 
   golden:
     name: Golden tests (Ubuntu)
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    env:
+      STUDY_ROOM_RUN_GOLDENS: "true"
     steps:
       - uses: actions/checkout@v4
+      - run: mkdir -p artifacts/ci
       - uses: subosito/flutter-action@v2
         with:
           flutter-version: '3.44.1'
@@ -165,6 +227,17 @@ jobs:
       - name: Run UI tests including Golden comparisons
         working-directory: packages/study_room_ui
         run: flutter test --no-pub --dart-define=STUDY_ROOM_RUN_GOLDENS=true test/golden/study_room_golden_harness_test.dart
+      - name: Record successful Golden evidence
+        working-directory: packages/study_room_ui
+        run: node ../../tool/golden-evidence.mjs test/golden/baselines ../../artifacts/ci/golden-evidence.json
+      - name: Upload Golden CI evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-golden-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/ci
+          if-no-files-found: warn
+          retention-days: 30
       - name: Upload generated Ubuntu Golden baselines
         if: ${{ always() && github.event_name == 'workflow_dispatch' && inputs.update_goldens }}
         uses: actions/upload-artifact@v4
@@ -217,4 +290,5 @@ jobs:
         env:
           POSTGRES_PASSWORD: ci-only-compose-validation
         run: docker compose --env-file .env.test.example --profile test config --quiet
-      - run: docker build -f server/Dockerfile .
+      - name: Build server Compose image
+        run: docker build -f server/Dockerfile .

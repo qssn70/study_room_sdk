@@ -11,6 +11,8 @@ import {
 
 const phase = process.env.E2E_PHASE ?? 'setup';
 const statePath = process.env.E2E_STATE_PATH ?? '/state/persistence.json';
+const resultPath = process.env.E2E_RESULT_PATH;
+const startedAt = Date.now();
 
 if (phase === 'setup') {
   const ownerId = `persist-owner-${runId}`;
@@ -124,6 +126,21 @@ if (phase === 'setup') {
     undefined,
     [400],
   );
+  const result = {
+    scenario: 'postgres-api-persistence',
+    passed: true,
+    startedAt: new Date(startedAt).toISOString(),
+    endedAt: new Date().toISOString(),
+    durationMs: Date.now() - startedAt,
+    roomId: state.roomId,
+    chatId: state.chatId,
+    sessionIds: state.sessionIds,
+    verifiedThrough: ['api-1', 'api-2'],
+  };
+  if (resultPath) {
+    await mkdir(dirname(resultPath), { recursive: true });
+    await writeFile(resultPath, `${JSON.stringify(result, null, 2)}\n`);
+  }
   console.log('Room, membership, chat, and active session persistence E2E passed.');
 } else {
   throw new Error(`Unknown E2E_PHASE: ${phase}`);

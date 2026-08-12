@@ -23,8 +23,10 @@ const runningId = randomUUID();
 const startedAt = Date.now();
 const client = new Client({ connectionString: databaseUrl });
 const prisma = new PrismaClient();
+const concurrentPrisma = new PrismaClient();
 let counts;
-let cleanAttempts = 0;
+let contentionSkippedCleanup = false;
+let concurrentCleaners = 0;
 let failure;
 
 function messageFor(error) {
@@ -68,18 +70,30 @@ try {
   );
   await client.query('COMMIT');
 
-  const retention = new RetentionService(prisma);
-  for (let attempt = 1; attempt <= 3; attempt += 1) {
-    cleanAttempts = attempt;
-    await retention.clean();
+  const expiredCount = async () => {
     const expired = await client.query(
       `SELECT
          (SELECT count(*) FROM "chat_messages" WHERE "id" = $1) +
          (SELECT count(*) FROM "study_sessions" WHERE "id" = $2) AS "remaining"`,
       [oldMessageId, oldFinishedId],
     );
-    if (Number(expired.rows[0].remaining) === 0) break;
+    return Number(expired.rows[0].remaining);
+  };
+  const retention = new RetentionService(prisma);
+  const concurrentRetention = new RetentionService(concurrentPrisma);
+
+  await client.query('BEGIN');
+  await client.query('SELECT pg_advisory_xact_lock(193701481)');
+  await retention.clean();
+  contentionSkippedCleanup = (await expiredCount()) === 2;
+  assert(contentionSkippedCleanup, 'Retention cleanup did not skip while another instance held the advisory lock');
+  await client.query('COMMIT');
+
+  concurrentCleaners = 2;
+  await Promise.all([retention.clean(), concurrentRetention.clean()]);
+  for (let attempt = 0; attempt < 3 && await expiredCount() !== 0; attempt += 1) {
     await delay(250);
+    await retention.clean();
   }
 
   const messageRows = await client.query(
@@ -115,6 +129,7 @@ try {
   await client.query('ROLLBACK').catch(() => undefined);
   await client.query(`DELETE FROM "applications" WHERE "app_id" = $1`, [appId]).catch(() => undefined);
   await prisma.$disconnect().catch(() => undefined);
+  await concurrentPrisma.$disconnect().catch(() => undefined);
   await client.end().catch(() => undefined);
 
   const result = {
@@ -125,7 +140,10 @@ try {
     durationMs: Date.now() - startedAt,
     applicationEnabled: false,
     retentionDays: { chat: 1, session: 1 },
-    cleanAttempts,
+    advisoryLock: {
+      contentionSkippedCleanup,
+      concurrentCleaners,
+    },
     counts: counts ?? null,
     failure: failure ?? null,
   };

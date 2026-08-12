@@ -34,7 +34,7 @@ describe('authoritative contracts', () => {
 
   it('defines the complete versioned HTTP surface and separate security schemes', () => {
     expect(openapi.openapi).toBe('3.1.0');
-    expect(openapi.info.version).toBe('0.4.0-beta.1');
+    expect(openapi.info.version).toBe('0.4.0-rc.1');
     expect(openapi.paths).toEqual(expect.objectContaining({
       '/admin/v1/apps': expect.any(Object),
       '/v1/rooms': expect.any(Object),

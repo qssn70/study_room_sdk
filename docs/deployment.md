@@ -67,7 +67,7 @@ curl http://localhost:3000/health/ready
 curl -X POST http://localhost:4000/token -H "content-type: application/json" -d '{"sub":"user-1","displayName":"User One"}'
 ```
 
-The JWKS container generates independent RS256/ES256 application keys plus an admin key at startup and exposes an unauthenticated token endpoint. It exists only in the explicit `dev`/`test` profiles and must not be deployed to production. Key rotation/retirement controls under `/__test` require an explicit `E2E_FIXTURE_CONTROL_TOKEN`; Compose provides no default token.
+The JWKS container generates independent RS256/ES256 application keys plus an admin key at startup and exposes an unauthenticated token endpoint. Browser preflight and credential-free CORS are enabled only for `/token`; `/__test` controls deliberately expose no CORS headers. The fixture exists only in the explicit `dev`/`test` profiles and must not be deployed to production. Key rotation/retirement controls under `/__test` require an explicit `E2E_FIXTURE_CONTROL_TOKEN`; Compose provides no default token.
 
 CI uses the `test` profile and injects a fresh database password and fixture control token for every run:
 
@@ -79,4 +79,26 @@ docker compose --env-file .env.test --profile test up --build --detach --wait pr
 docker compose --env-file .env.test --profile test run --rm e2e
 ```
 
-The main-branch and manually dispatched Compose integration workflow additionally runs phased persistence checks through the `study_room_e2e_state` volume. It stops both APIs, restarts PostgreSQL, restores the APIs, and verifies the stored room, membership, chat message, and active session. A separate crash scenario disables the `api-2` restart policy, sends `SIGKILL`, and waits for its Redis presence keys to expire before recreating the instance. The workflow always uploads Compose diagnostics and removes its named volumes.
+The `core` Compose integration job runs phased persistence checks through the
+`study_room_e2e_state` volume. It stops both APIs and PostgreSQL, starts the
+same database volume again, and verifies the stored room, membership, chat
+message, and active sessions through both API instances. The core flow also
+exercises concurrent join requests, concurrent active-session creation, the
+complete remove/leave/rejoin/ownership-transfer/delete lifecycle, and
+cross-tenant REST and WebSocket isolation.
+
+The `resilience` job starts the OpenTelemetry Collector only through the
+explicit `test` profile. It exports traces to a JSON-lines file, verifies spans
+from both API instance IDs with `service.name=study-room-server`, and confirms
+that `docker stop --timeout 15 api-1` exits cleanly and flushes telemetry while
+the proxy continues to serve through `api-2`. A separate crash scenario
+disables the `api-2` restart policy, sends `SIGKILL`, records the Redis
+connection/index TTL before and after refresh, and waits for those keys to
+expire before recreating the instance.
+
+All five Compose jobs upload timestamped logs, `compose-ps.json`, structured
+scenario results, and `service-images.json`. The image evidence maps running
+services to container IDs, immutable image IDs, and available repository
+digests, and each job directly asserts that `api-1` and `api-2` use the same
+image ID. Every job removes its isolated containers, networks, and named
+volumes after evidence upload.

@@ -4,7 +4,9 @@ import { join, relative, resolve, sep } from 'node:path';
 
 const artifactDirectory = resolve(process.env.EVIDENCE_ARTIFACT_DIR ?? 'artifacts');
 const outputPath = resolve(process.env.EVIDENCE_OUTPUT_PATH ?? join(artifactDirectory, 'evidence-manifest.json'));
-const imagesPath = resolve(process.env.EVIDENCE_IMAGES_PATH ?? join(artifactDirectory, 'images.json'));
+const imagesPath = resolve(
+  process.env.EVIDENCE_IMAGES_PATH ?? join(artifactDirectory, 'service-images.json'),
+);
 const startedAtPath = resolve(
   process.env.EVIDENCE_STARTED_AT_PATH ?? join(artifactDirectory, 'job-started-at-epoch'),
 );
@@ -27,15 +29,20 @@ async function sha256(path) {
 
 async function readImages() {
   try {
-    const images = JSON.parse(await readFile(imagesPath, 'utf8'));
-    const entries = Array.isArray(images) ? images : [];
+    const evidence = JSON.parse(await readFile(imagesPath, 'utf8'));
+    const services = evidence && typeof evidence === 'object' && !Array.isArray(evidence)
+      ? (evidence.services ?? {})
+      : {};
+    const entries = Object.entries(services).map(([service, image]) => ({ service, ...image }));
     return {
       entries,
+      assertions: evidence?.assertions ?? null,
       unavailableReason: entries.length === 0 ? 'No Compose images were available to inspect' : null,
     };
   } catch (error) {
     return {
       entries: [],
+      assertions: null,
       unavailableReason: error instanceof Error ? error.message : String(error),
     };
   }

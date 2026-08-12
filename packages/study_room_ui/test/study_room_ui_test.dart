@@ -739,6 +739,41 @@ void main() {
     expect(started, isTrue);
   });
 
+  testWidgets('StudyRoomView forwards resume and finish actions', (
+    tester,
+  ) async {
+    var resumed = false;
+    var finished = false;
+    final room = StudyRoom(
+      id: 'room-1',
+      appId: 'app-1',
+      title: 'Focus room',
+      version: 1,
+      members: const [],
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: StudyRoomView(
+          room: room,
+          elapsed: const Duration(minutes: 10),
+          sessionStatus: StudySessionStatus.paused,
+          messages: const [],
+          onStart: () {},
+          onPause: () {},
+          onResume: () => resumed = true,
+          onFinish: () => finished = true,
+          onSendMessage: (_) async {},
+        ),
+      ),
+    );
+
+    await tester.tap(find.byIcon(Icons.play_arrow));
+    await tester.tap(find.byIcon(Icons.stop));
+    expect(resumed, isTrue);
+    expect(finished, isTrue);
+  });
+
   testWidgets('ChatPanel sends trimmed non-empty text', (tester) async {
     String? sent;
 

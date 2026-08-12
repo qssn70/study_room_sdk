@@ -7,6 +7,7 @@ const statePath = process.env.E2E_STATE_PATH ?? '/state/restore.json';
 const resultPath = process.env.E2E_RESULT_PATH;
 
 if (phase === 'setup') {
+  const startedAt = Date.now();
   const ownerId = `restore-owner-${runId}`;
   const ownerToken = await token({ sub: ownerId, displayName: 'Restore Owner' });
   const room = await request(api1, ownerToken, 'POST', '/v1/rooms', { title: `Restore ${runId}` });
@@ -28,6 +29,7 @@ if (phase === 'setup') {
     messageId: message.id,
     messageText: message.text,
     sessionId: paused.id,
+    setupStartedAt: new Date(startedAt).toISOString(),
   }, null, 2));
   console.log(`Restore source state written to ${statePath}.`);
 } else if (phase === 'verify') {
@@ -43,11 +45,14 @@ if (phase === 'setup') {
   const result = {
     scenario: 'postgres-logical-restore',
     passed: true,
+    startedAt: state.setupStartedAt ?? null,
+    endedAt: new Date().toISOString(),
     restored: { roomId: state.roomId, messageId: state.messageId, sessionId: state.sessionId },
+    verifiedThrough: ['api-1', 'api-2'],
   };
   if (resultPath) {
     await mkdir(dirname(resultPath), { recursive: true });
-    await writeFile(resultPath, JSON.stringify(result, null, 2));
+    await writeFile(resultPath, `${JSON.stringify(result, null, 2)}\n`);
   }
   console.log('Restored PostgreSQL data was verified through both API instances.');
 } else {

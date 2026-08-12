@@ -59,11 +59,10 @@ jobs:
         run: |
           docker compose ps --all --format json > artifacts/compose-ps.json 2>&1 || true
           docker compose logs --no-color --timestamps > artifacts/compose.log 2>&1 || true
-          image_ids=$(docker compose images -q | sort -u)
-          if [[ -n "$image_ids" ]]; then
-            docker image inspect $image_ids | jq '[.[] | {id:.Id,repoDigests:(.RepoDigests // []),repoTags:(.RepoTags // [])}]' > artifacts/images.json
-          else
-            echo '[]' > artifacts/images.json
+          if ! node server/tool/e2e-service-images.mjs \
+            --compose-ps artifacts/compose-ps.json --output artifacts/service-images.json; then
+            jq -n '{schemaVersion:1,services:{},assertions:{apiImagesPresent:false,apiImageIdsMatch:false},captureError:"service image capture failed"}' \
+              > artifacts/service-images.json
           fi
           jq -n \
             --arg scenario rate-limit \
@@ -72,6 +71,8 @@ jobs:
             '{scenario:$scenario,steps:{start:$start,probe:$probe}}' \
             > artifacts/result.json
           EVIDENCE_SCENARIO=rate-limit node server/tool/e2e-evidence-manifest.mjs
+          jq -e '.assertions.apiImagesPresent and .assertions.apiImageIdsMatch' artifacts/service-images.json > /dev/null
+          jq -e 'all(.steps[]; . == "success")' artifacts/result.json > /dev/null
 
       - name: Upload rate-limit evidence
         if: always()
@@ -124,11 +125,37 @@ jobs:
 
       - name: Cross-instance core flow and duplicate-event idempotency
         id: business
-        run: docker compose --profile test run --rm --no-deps e2e
+        run: |
+          docker compose --profile test run --rm --no-deps \
+            -v "$GITHUB_WORKSPACE/artifacts:/artifacts" \
+            -e E2E_RESULT_PATH=/artifacts/core-flow.json \
+            e2e
 
       - name: Authentication, tenant isolation, rotation, expiry, and application disable
         id: security
-        run: docker compose --profile test run --rm --no-deps e2e node tool/e2e-security.mjs
+        run: |
+          docker compose --profile test run --rm --no-deps \
+            -v "$GITHUB_WORKSPACE/artifacts:/artifacts" \
+            -e E2E_RESULT_PATH=/artifacts/security.json \
+            e2e node tool/e2e-security.mjs
+
+      - name: Verify PostgreSQL persistence across API and database restarts
+        id: persistence
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker compose --profile test run --rm --no-deps \
+            -e E2E_PHASE=setup \
+            e2e node tool/e2e-persistence.mjs
+          docker compose stop --timeout 15 api-1 api-2
+          docker compose stop --timeout 15 postgres
+          docker compose up --detach --wait postgres
+          docker compose --profile test up --detach --no-deps --wait api-1 api-2
+          docker compose --profile test run --rm --no-deps \
+            -v "$GITHUB_WORKSPACE/artifacts:/artifacts" \
+            -e E2E_PHASE=verify \
+            -e E2E_RESULT_PATH=/artifacts/persistence.json \
+            e2e node tool/e2e-persistence.mjs
 
       - name: Verify database tenant and owner constraints with invalid writes
         id: database_integrity
@@ -152,11 +179,10 @@ jobs:
         run: |
           docker compose ps --all --format json > artifacts/compose-ps.json 2>&1 || true
           docker compose logs --no-color --timestamps > artifacts/compose.log 2>&1 || true
-          image_ids=$(docker compose images -q | sort -u)
-          if [[ -n "$image_ids" ]]; then
-            docker image inspect $image_ids | jq '[.[] | {id:.Id,repoDigests:(.RepoDigests // []),repoTags:(.RepoTags // [])}]' > artifacts/images.json
-          else
-            echo '[]' > artifacts/images.json
+          if ! node server/tool/e2e-service-images.mjs \
+            --compose-ps artifacts/compose-ps.json --output artifacts/service-images.json; then
+            jq -n '{schemaVersion:1,services:{},assertions:{apiImagesPresent:false,apiImageIdsMatch:false},captureError:"service image capture failed"}' \
+              > artifacts/service-images.json
           fi
           jq -n \
             --arg scenario core \
@@ -164,11 +190,14 @@ jobs:
             --arg migration '${{ steps.migration.outcome }}' \
             --arg business '${{ steps.business.outcome }}' \
             --arg security '${{ steps.security.outcome }}' \
+            --arg persistence '${{ steps.persistence.outcome }}' \
             --arg databaseIntegrity '${{ steps.database_integrity.outcome }}' \
             --arg retention '${{ steps.retention.outcome }}' \
-            '{scenario:$scenario,steps:{start:$start,migration:$migration,business:$business,security:$security,databaseIntegrity:$databaseIntegrity,retention:$retention}}' \
+            '{scenario:$scenario,steps:{start:$start,migration:$migration,business:$business,security:$security,persistence:$persistence,databaseIntegrity:$databaseIntegrity,retention:$retention}}' \
             > artifacts/result.json
           EVIDENCE_SCENARIO=core node server/tool/e2e-evidence-manifest.mjs
+          jq -e '.assertions.apiImagesPresent and .assertions.apiImageIdsMatch' artifacts/service-images.json > /dev/null
+          jq -e 'all(.steps[]; . == "success")' artifacts/result.json > /dev/null
 
       - name: Upload core evidence
         if: always()
@@ -200,7 +229,12 @@ jobs:
       E2E_RUN_ID: resilience-${{ github.run_id }}-${{ github.run_attempt }}
       STUDY_ROOM_PRESENCE_TTL_SECONDS: 4
       STUDY_ROOM_PRESENCE_REFRESH_SECONDS: 1
-      E2E_PRESENCE_EXPIRE_WAIT_MS: 6000
+      E2E_PRESENCE_EXPIRE_WAIT_MS: 11000
+      OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: http://otel:4318/v1/traces
+      OTEL_SERVICE_NAME: study-room-server
+      OTEL_BSP_SCHEDULE_DELAY: 60000
+      OTEL_BSP_MAX_EXPORT_BATCH_SIZE: 8192
+      OTEL_BSP_MAX_QUEUE_SIZE: 16384
     steps:
       - uses: actions/checkout@v4
       - name: Initialize evidence timing
@@ -211,7 +245,8 @@ jobs:
       - name: Start isolated resilience stack
         id: start
         run: |
-          docker compose --profile test up --build --detach --wait postgres redis jwks
+          cp deploy/nginx-upstream.conf artifacts/nginx-upstream.conf.original
+          docker compose --profile test up --build --detach --wait postgres redis jwks otel
           docker compose --profile test run --rm migrate
           docker compose --profile test run --rm --no-deps seed
           docker compose --profile test up --build --detach --wait proxy
@@ -361,21 +396,57 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          rm -f artifacts/rolling-probe.ready artifacts/rolling-probe.stop artifacts/rolling-probe.json
           docker compose --profile test run --rm --no-deps \
             -v "$GITHUB_WORKSPACE/artifacts:/artifacts" \
-            -e E2E_PROBE_DURATION_MS=30000 \
+            -e E2E_PROBE_MAX_DURATION_MS=120000 \
+            -e E2E_READY_PATH=/artifacts/rolling-probe.ready \
+            -e E2E_STOP_PATH=/artifacts/rolling-probe.stop \
             -e E2E_RESULT_PATH=/artifacts/rolling-probe.json \
             e2e node tool/e2e-proxy-probe.mjs &
           probe_pid=$!
           cleanup_probe() {
-            if kill -0 "$probe_pid" 2>/dev/null; then kill "$probe_pid" || true; fi
+            touch artifacts/rolling-probe.stop
+            if kill -0 "$probe_pid" 2>/dev/null; then
+              for _ in $(seq 1 25); do
+                kill -0 "$probe_pid" 2>/dev/null || break
+                sleep 0.2
+              done
+              kill -0 "$probe_pid" 2>/dev/null && kill "$probe_pid" || true
+              wait "$probe_pid" 2>/dev/null || true
+            fi
           }
           trap cleanup_probe EXIT
-          sleep 3
-          docker compose --profile test up --detach --force-recreate --no-deps --wait api-1
-          sleep 3
-          docker compose --profile test up --detach --force-recreate --no-deps --wait api-2
+          for _ in $(seq 1 60); do
+            [[ -f artifacts/rolling-probe.ready ]] && break
+            sleep 1
+          done
+          [[ -f artifacts/rolling-probe.ready ]]
+          restore_upstream() {
+            cp artifacts/nginx-upstream.conf.original deploy/nginx-upstream.conf
+            docker compose exec -T proxy nginx -t >/dev/null 2>&1 \
+              && docker compose exec -T proxy nginx -s reload >/dev/null 2>&1 || true
+          }
+          trap 'restore_upstream; cleanup_probe' EXIT
+          drain_and_replace() {
+            local service="$1"
+            awk -v service="$service" \
+              '$0 ~ "server " service ":3000" { sub(/;$/, " down;") } { print }' \
+              artifacts/nginx-upstream.conf.original > deploy/nginx-upstream.conf
+            docker compose exec -T proxy nginx -t
+            docker compose exec -T proxy nginx -s reload
+            sleep 2
+            docker compose --profile test up --detach --force-recreate --no-deps --wait "$service"
+            cp artifacts/nginx-upstream.conf.original deploy/nginx-upstream.conf
+            docker compose exec -T proxy nginx -t
+            docker compose exec -T proxy nginx -s reload
+            sleep 3
+          }
+          drain_and_replace api-1
+          drain_and_replace api-2
+          touch artifacts/rolling-probe.stop
           wait "$probe_pid"
+          restore_upstream
           trap - EXIT
 
       - name: Verify liveness, readiness, and protected metrics
@@ -386,12 +457,162 @@ jobs:
             -e E2E_RESULT_PATH=/artifacts/operations.json \
             e2e node tool/e2e-operations.mjs
 
+      - name: Verify graceful shutdown and OpenTelemetry flush
+        id: graceful_otel
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f artifacts/graceful-proxy.ready artifacts/graceful-proxy.stop artifacts/graceful-proxy.json \
+            artifacts/graceful-api-2.ready artifacts/graceful-api-2.stop artifacts/graceful-api-2.json
+          curl --max-time 5 --fail --silent http://localhost:3000/health/live > /dev/null
+          curl --max-time 5 --fail --silent http://localhost:3000/health/live > /dev/null
+          copied=false
+          for _ in $(seq 1 30); do
+            if docker compose cp otel:/var/lib/otel/traces.jsonl artifacts/otel-before-shutdown.jsonl \
+              && [[ -s artifacts/otel-before-shutdown.jsonl ]]; then
+              copied=true
+              break
+            fi
+            sleep 1
+          done
+          if [[ "$copied" != true ]]; then
+            echo 'OpenTelemetry collector did not write baseline trace evidence' >&2
+            exit 1
+          fi
+          docker compose --profile test run --rm --no-deps \
+            -v "$GITHUB_WORKSPACE/artifacts:/artifacts" \
+            -e E2E_OTEL_TRACES_PATH=/artifacts/otel-before-shutdown.jsonl \
+            -e E2E_RESULT_PATH=/artifacts/otel-before-shutdown.json \
+            e2e node tool/e2e-otel.mjs
+          shutdown_marker="graceful-${E2E_RUN_ID}-$(openssl rand -hex 16)"
+
+          api_1_id=$(docker compose ps -q api-1)
+          docker compose --profile test run --rm --no-deps \
+            -v "$GITHUB_WORKSPACE/artifacts:/artifacts" \
+            -e E2E_PROBE_MAX_DURATION_MS=120000 \
+            -e E2E_READY_PATH=/artifacts/graceful-proxy.ready \
+            -e E2E_STOP_PATH=/artifacts/graceful-proxy.stop \
+            -e E2E_RESULT_PATH=/artifacts/graceful-proxy.json \
+            e2e node tool/e2e-proxy-probe.mjs &
+          probe_pid=$!
+          docker compose --profile test run --rm --no-deps \
+            -v "$GITHUB_WORKSPACE/artifacts:/artifacts" \
+            -e E2E_HTTP_PROBE_URL=http://api-2:3000/health/ready \
+            -e E2E_PROBE_MAX_DURATION_MS=120000 \
+            -e E2E_READY_PATH=/artifacts/graceful-api-2.ready \
+            -e E2E_STOP_PATH=/artifacts/graceful-api-2.stop \
+            -e E2E_RESULT_PATH=/artifacts/graceful-api-2.json \
+            e2e node tool/e2e-http-probe.mjs &
+          api_2_probe_pid=$!
+          cleanup_probe() {
+            touch artifacts/graceful-proxy.stop artifacts/graceful-api-2.stop
+            for pid in "$probe_pid" "$api_2_probe_pid"; do
+              if kill -0 "$pid" 2>/dev/null; then
+                for _ in $(seq 1 25); do
+                  kill -0 "$pid" 2>/dev/null || break
+                  sleep 0.2
+                done
+                kill -0 "$pid" 2>/dev/null && kill "$pid" || true
+                wait "$pid" 2>/dev/null || true
+              fi
+            done
+          }
+          trap cleanup_probe EXIT
+          for _ in $(seq 1 60); do
+            [[ -f artifacts/graceful-proxy.ready && -f artifacts/graceful-api-2.ready ]] && break
+            sleep 1
+          done
+          if [[ ! -f artifacts/graceful-proxy.ready || ! -f artifacts/graceful-api-2.ready ]]; then
+            echo 'Graceful shutdown probes did not become ready' >&2
+            exit 1
+          fi
+          awk \
+            '$0 ~ "server api-1:3000" { sub(/;$/, " down;") } { print }' \
+            artifacts/nginx-upstream.conf.original > deploy/nginx-upstream.conf
+          docker compose exec -T proxy nginx -t
+          docker compose exec -T proxy nginx -s reload
+          sleep 2
+          docker compose exec -T -e E2E_TRACE_MARKER="$shutdown_marker" api-2 \
+            node -e '
+              fetch("http://api-1:3000/health/live", {
+                headers: {"x-study-room-e2e-trace-marker": process.env.E2E_TRACE_MARKER},
+                signal: AbortSignal.timeout(5000),
+              }).then((response) => {
+                if (!response.ok) throw new Error(`Unexpected status ${response.status}`);
+              }).catch((error) => { console.error(error); process.exit(1); });
+            '
+          docker compose cp otel:/var/lib/otel/traces.jsonl artifacts/otel-before-sigterm.jsonl
+          [[ -s artifacts/otel-before-sigterm.jsonl ]]
+          docker compose --profile test run --rm --no-deps \
+            -v "$GITHUB_WORKSPACE/artifacts:/artifacts" \
+            -e E2E_OTEL_TRACES_PATH=/artifacts/otel-before-sigterm.jsonl \
+            -e E2E_OTEL_FORBIDDEN_MARKER="$shutdown_marker" \
+            -e E2E_OTEL_FORBIDDEN_MARKER_INSTANCE=api-1 \
+            -e E2E_RESULT_PATH=/artifacts/otel-before-sigterm.json \
+            e2e node tool/e2e-otel.mjs
+          baseline_spans=$(jq -c '{"api-1": .instanceSpanCounts["api-1"]}' \
+            artifacts/otel-before-sigterm.json)
+          docker compose stop --timeout 15 api-1
+          curl --max-time 5 --fail --silent http://localhost:3000/health/live > /dev/null
+          docker compose exec -T api-2 \
+            node -e '
+              fetch("http://localhost:3000/health/ready", {signal: AbortSignal.timeout(5000)})
+                .then((response) => {
+                  if (!response.ok) throw new Error(`Unexpected status ${response.status}`);
+                }).catch((error) => { console.error(error); process.exit(1); });
+            '
+          touch artifacts/graceful-proxy.stop artifacts/graceful-api-2.stop
+          wait "$probe_pid"
+          wait "$api_2_probe_pid"
+          trap - EXIT
+
+          docker inspect "$api_1_id" | jq '.[0] | {
+            containerId:.Id,
+            state:{exitCode:.State.ExitCode,oomKilled:.State.OOMKilled,error:.State.Error,finishedAt:.State.FinishedAt}
+          }' > artifacts/graceful-shutdown.json
+          docker logs --timestamps "$api_1_id" > artifacts/api-1-graceful.log 2>&1
+          jq -e '.state.exitCode == 0 and .state.oomKilled == false and .state.error == ""' \
+            artifacts/graceful-shutdown.json > /dev/null
+          jq -e '.passed and (.failures | length == 0)' artifacts/graceful-proxy.json > /dev/null
+          jq -e '.passed and (.failures | length == 0)' artifacts/graceful-api-2.json > /dev/null
+          grep -q 'Study Room API shutdown complete' artifacts/api-1-graceful.log
+
+          flushed=false
+          for _ in $(seq 1 30); do
+            if docker compose cp otel:/var/lib/otel/traces.jsonl artifacts/otel-traces.jsonl \
+              && [[ -s artifacts/otel-traces.jsonl ]]; then
+              if docker compose --profile test run --rm --no-deps \
+                -v "$GITHUB_WORKSPACE/artifacts:/artifacts" \
+                -e E2E_OTEL_TRACES_PATH=/artifacts/otel-traces.jsonl \
+                -e E2E_OTEL_MINIMUM_INSTANCE_SPANS="$baseline_spans" \
+                -e E2E_OTEL_EXPECTED_MARKER="$shutdown_marker" \
+                -e E2E_OTEL_EXPECTED_MARKER_INSTANCE=api-1 \
+                -e E2E_RESULT_PATH=/artifacts/otel.json \
+                e2e node tool/e2e-otel.mjs; then
+                flushed=true
+                break
+              fi
+            fi
+            sleep 1
+          done
+          if [[ "$flushed" != true ]]; then
+            echo 'OpenTelemetry collector did not receive the api-1 shutdown marker within 30 seconds' >&2
+            exit 1
+          fi
+          docker compose --profile test up --detach --no-deps --wait api-1
+          cp artifacts/nginx-upstream.conf.original deploy/nginx-upstream.conf
+          docker compose exec -T proxy nginx -t
+          docker compose exec -T proxy nginx -s reload
+
       - name: Verify presence expiry after SIGKILL
         id: crash
         shell: bash
         run: |
           set -euo pipefail
-          docker compose --profile test run --rm --no-deps e2e node tool/e2e-presence-crash.mjs &
+          docker compose --profile test run --rm --no-deps \
+            -v "$GITHUB_WORKSPACE/artifacts:/artifacts" \
+            -e E2E_RESULT_PATH=/artifacts/presence-crash.json \
+            e2e node tool/e2e-presence-crash.mjs &
           crash_test_pid=$!
           cleanup_background() {
             if kill -0 "$crash_test_pid" 2>/dev/null; then kill "$crash_test_pid" || true; fi
@@ -422,13 +643,17 @@ jobs:
         if: always()
         shell: bash
         run: |
+          if [[ -f artifacts/nginx-upstream.conf.original ]]; then
+            cp artifacts/nginx-upstream.conf.original deploy/nginx-upstream.conf
+            docker compose exec -T proxy nginx -t >/dev/null 2>&1 \
+              && docker compose exec -T proxy nginx -s reload >/dev/null 2>&1 || true
+          fi
           docker compose ps --all --format json > artifacts/compose-ps.json 2>&1 || true
           docker compose logs --no-color --timestamps > artifacts/compose.log 2>&1 || true
-          image_ids=$(docker compose images -q | sort -u)
-          if [[ -n "$image_ids" ]]; then
-            docker image inspect $image_ids | jq '[.[] | {id:.Id,repoDigests:(.RepoDigests // []),repoTags:(.RepoTags // [])}]' > artifacts/images.json
-          else
-            echo '[]' > artifacts/images.json
+          if ! node server/tool/e2e-service-images.mjs \
+            --compose-ps artifacts/compose-ps.json --output artifacts/service-images.json; then
+            jq -n '{schemaVersion:1,services:{},assertions:{apiImagesPresent:false,apiImageIdsMatch:false},captureError:"service image capture failed"}' \
+              > artifacts/service-images.json
           fi
           jq -n \
             --arg scenario resilience \
@@ -436,10 +661,13 @@ jobs:
             --arg dependencies '${{ steps.dependencies.outcome }}' \
             --arg rolling '${{ steps.rolling.outcome }}' \
             --arg operations '${{ steps.operations.outcome }}' \
+            --arg gracefulOtel '${{ steps.graceful_otel.outcome }}' \
             --arg crash '${{ steps.crash.outcome }}' \
-            '{scenario:$scenario,steps:{start:$start,dependencies:$dependencies,rolling:$rolling,operations:$operations,crash:$crash}}' \
+            '{scenario:$scenario,steps:{start:$start,dependencies:$dependencies,rolling:$rolling,operations:$operations,gracefulOtel:$gracefulOtel,crash:$crash}}' \
             > artifacts/result.json
           EVIDENCE_SCENARIO=resilience node server/tool/e2e-evidence-manifest.mjs
+          jq -e '.assertions.apiImagesPresent and .assertions.apiImageIdsMatch' artifacts/service-images.json > /dev/null
+          jq -e 'all(.steps[]; . == "success")' artifacts/result.json > /dev/null
 
       - name: Upload resilience evidence
         if: always()
@@ -528,11 +756,10 @@ jobs:
         run: |
           docker compose ps --all --format json > artifacts/compose-ps.json 2>&1 || true
           docker compose logs --no-color --timestamps > artifacts/compose.log 2>&1 || true
-          image_ids=$(docker compose images -q | sort -u)
-          if [[ -n "$image_ids" ]]; then
-            docker image inspect $image_ids | jq '[.[] | {id:.Id,repoDigests:(.RepoDigests // []),repoTags:(.RepoTags // [])}]' > artifacts/images.json
-          else
-            echo '[]' > artifacts/images.json
+          if ! node server/tool/e2e-service-images.mjs \
+            --compose-ps artifacts/compose-ps.json --output artifacts/service-images.json; then
+            jq -n '{schemaVersion:1,services:{},assertions:{apiImagesPresent:false,apiImageIdsMatch:false},captureError:"service image capture failed"}' \
+              > artifacts/service-images.json
           fi
           jq -n \
             --arg scenario restore \
@@ -544,6 +771,8 @@ jobs:
             '{scenario:$scenario,steps:{start:$start,setup:$setup,backupRestore:$backupRestore,switchDatabase:$switchDatabase,verify:$verify}}' \
             > artifacts/result.json
           EVIDENCE_SCENARIO=restore node server/tool/e2e-evidence-manifest.mjs
+          jq -e '.assertions.apiImagesPresent and .assertions.apiImageIdsMatch' artifacts/service-images.json > /dev/null
+          jq -e 'all(.steps[]; . == "success")' artifacts/result.json > /dev/null
 
       - name: Upload restore evidence
         if: always()
@@ -584,16 +813,18 @@ jobs:
       - name: Start isolated soak stack
         id: start
         run: |
+          cp deploy/nginx-upstream.conf artifacts/nginx-upstream.conf.original
           docker compose --profile test up --build --detach --wait postgres redis jwks
           docker compose --profile test run --rm migrate
           docker compose --profile test run --rm --no-deps seed
-          docker compose --profile test up --build --detach --wait proxy
+          docker compose --profile test up --build --detach --wait proxy proxy-test
 
       - name: Run ten-minute mixed HTTP/WebSocket soak with rolling replacements
         id: workload
         shell: bash
         run: |
           set -euo pipefail
+          rm -f artifacts/soak-proxy.ready artifacts/soak-proxy.stop artifacts/soak-proxy.json
           docker compose --profile test run --rm --no-deps \
             -v "$GITHUB_WORKSPACE/artifacts:/artifacts" \
             -e E2E_SOAK_DURATION_MS=600000 \
@@ -601,8 +832,28 @@ jobs:
             -e E2E_RESULT_PATH=/artifacts/soak.json \
             e2e node tool/e2e-soak.mjs &
           soak_pid=$!
+          docker compose --profile test run --rm --no-deps \
+            -v "$GITHUB_WORKSPACE/artifacts:/artifacts" \
+            -e E2E_PROBE_MAX_DURATION_MS=720000 \
+            -e E2E_READY_PATH=/artifacts/soak-proxy.ready \
+            -e E2E_STOP_PATH=/artifacts/soak-proxy.stop \
+            -e E2E_RESULT_PATH=/artifacts/soak-proxy.json \
+            e2e node tool/e2e-proxy-probe.mjs &
+          proxy_probe_pid=$!
           cleanup_soak() {
-            if kill -0 "$soak_pid" 2>/dev/null; then kill "$soak_pid" || true; fi
+            touch artifacts/soak-proxy.stop
+            if kill -0 "$proxy_probe_pid" 2>/dev/null; then
+              for _ in $(seq 1 25); do
+                kill -0 "$proxy_probe_pid" 2>/dev/null || break
+                sleep 0.2
+              done
+              kill -0 "$proxy_probe_pid" 2>/dev/null && kill "$proxy_probe_pid" || true
+              wait "$proxy_probe_pid" 2>/dev/null || true
+            fi
+            if kill -0 "$soak_pid" 2>/dev/null; then
+              kill "$soak_pid" || true
+              wait "$soak_pid" 2>/dev/null || true
+            fi
           }
           trap cleanup_soak EXIT
           jq -n \
@@ -618,6 +869,41 @@ jobs:
               > artifacts/soak-replacements.tmp
             mv artifacts/soak-replacements.tmp artifacts/soak-replacements.json
           }
+          restore_upstream() {
+            cp artifacts/nginx-upstream.conf.original deploy/nginx-upstream.conf
+            docker compose exec -T proxy nginx -t >/dev/null 2>&1 \
+              && docker compose exec -T proxy nginx -s reload >/dev/null 2>&1 || true
+          }
+          trap 'restore_upstream; cleanup_soak' EXIT
+          drain_and_replace() {
+            local service="$1"
+            awk -v service="$service" \
+              '$0 ~ "server " service ":3000" { sub(/;$/, " down;") } { print }' \
+              artifacts/nginx-upstream.conf.original > deploy/nginx-upstream.conf
+            docker compose exec -T proxy nginx -t
+            docker compose exec -T proxy nginx -s reload
+            sleep 2
+            docker compose --profile test up --detach --force-recreate --no-deps --wait "$service"
+            cp artifacts/nginx-upstream.conf.original deploy/nginx-upstream.conf
+            docker compose exec -T proxy nginx -t
+            docker compose exec -T proxy nginx -s reload
+            docker compose exec -T proxy-test nginx -s reload
+            sleep 3
+          }
+          wait_for_reconnect_count() {
+            local expected="$1"
+            local baseline="$2"
+            local current
+            for _ in $(seq 1 120); do
+              current=$(docker compose exec -T redis redis-cli --raw GET "e2e:soak:${E2E_RUN_ID}:reconnects" | tr -d '\r' || true)
+              if [[ "${current:-0}" =~ ^[0-9]+$ ]] && (( current >= baseline + expected )); then
+                return 0
+              fi
+              sleep 1
+            done
+            echo "Soak did not observe ${expected} proxy WebSocket reconnect(s) after replacement" >&2
+            return 1
+          }
 
           ready=false
           for _ in $(seq 1 90); do
@@ -631,29 +917,49 @@ jobs:
             echo "Soak workload did not become ready" >&2
             exit 1
           fi
+          for _ in $(seq 1 60); do
+            [[ -f artifacts/soak-proxy.ready ]] && break
+            sleep 1
+          done
+          [[ -f artifacts/soak-proxy.ready ]]
 
           sleep 120
           record_replacement api-1 startedAt
-          docker compose --profile test up --detach --force-recreate --no-deps --wait api-1
+          reconnects_before=$(docker compose exec -T redis redis-cli --raw GET "e2e:soak:${E2E_RUN_ID}:reconnects" | tr -d '\r' || true)
+          reconnects_before=${reconnects_before:-0}
+          [[ "$reconnects_before" =~ ^[0-9]+$ ]]
+          drain_and_replace api-1
           record_replacement api-1 completedAt
+          wait_for_reconnect_count 1 "$reconnects_before"
           sleep 180
           record_replacement api-2 startedAt
-          docker compose --profile test up --detach --force-recreate --no-deps --wait api-2
+          reconnects_before=$(docker compose exec -T redis redis-cli --raw GET "e2e:soak:${E2E_RUN_ID}:reconnects" | tr -d '\r' || true)
+          reconnects_before=${reconnects_before:-0}
+          [[ "$reconnects_before" =~ ^[0-9]+$ ]]
+          drain_and_replace api-2
           record_replacement api-2 completedAt
+          wait_for_reconnect_count 1 "$reconnects_before"
           wait "$soak_pid"
+          touch artifacts/soak-proxy.stop
+          wait "$proxy_probe_pid"
+          restore_upstream
           trap - EXIT
 
       - name: Capture structured result and diagnostics
         if: always()
         shell: bash
         run: |
+          if [[ -f artifacts/nginx-upstream.conf.original ]]; then
+            cp artifacts/nginx-upstream.conf.original deploy/nginx-upstream.conf
+            docker compose exec -T proxy nginx -t >/dev/null 2>&1 \
+              && docker compose exec -T proxy nginx -s reload >/dev/null 2>&1 || true
+          fi
           docker compose ps --all --format json > artifacts/compose-ps.json 2>&1 || true
           docker compose logs --no-color --timestamps > artifacts/compose.log 2>&1 || true
-          image_ids=$(docker compose images -q | sort -u)
-          if [[ -n "$image_ids" ]]; then
-            docker image inspect $image_ids | jq '[.[] | {id:.Id,repoDigests:(.RepoDigests // []),repoTags:(.RepoTags // [])}]' > artifacts/images.json
-          else
-            echo '[]' > artifacts/images.json
+          if ! node server/tool/e2e-service-images.mjs \
+            --compose-ps artifacts/compose-ps.json --output artifacts/service-images.json; then
+            jq -n '{schemaVersion:1,services:{},assertions:{apiImagesPresent:false,apiImageIdsMatch:false},captureError:"service image capture failed"}' \
+              > artifacts/service-images.json
           fi
           jq -n \
             --arg scenario soak \
@@ -662,6 +968,8 @@ jobs:
             '{scenario:$scenario,steps:{start:$start,workload:$workload}}' \
             > artifacts/result.json
           EVIDENCE_SCENARIO=soak node server/tool/e2e-evidence-manifest.mjs
+          jq -e '.assertions.apiImagesPresent and .assertions.apiImageIdsMatch' artifacts/service-images.json > /dev/null
+          jq -e 'all(.steps[]; . == "success")' artifacts/result.json > /dev/null
 
       - name: Upload soak evidence
         if: always()

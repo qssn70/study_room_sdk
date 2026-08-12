@@ -8,7 +8,7 @@
   "workflowTitle": "Study Room 0.4 workflow",
   "membersTab": "Members",
   "requestsTab": "Requests",
-  "configurationInstructions": "Run with --dart-define=STUDY_ROOM_API_URL=http://localhost:3000 --dart-define=STUDY_ROOM_REALTIME_URL=ws://localhost:3000/v1/realtime --dart-define=STUDY_ROOM_TOKEN=<jwt> --dart-define=STUDY_ROOM_TOKEN_EXPIRES_AT=<unix-seconds>.",
+  "configurationInstructions": "Run with --dart-define=STUDY_ROOM_API_URL=http://localhost:3000 --dart-define=STUDY_ROOM_REALTIME_URL=ws://localhost:3000/v1/realtime --dart-define=STUDY_ROOM_DEV_TOKEN_URL=http://localhost:4000/token.",
   "demoRoomTitle": "Demo Focus Room",
   "currentUserName": "You",
   "startupFailed": "Unable to start the live room workflow. Check the configuration and try again."

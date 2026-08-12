@@ -17,8 +17,8 @@ class StudyRoomTokenRequest {
 }
 
 class StudyRoomAccessToken {
-  const StudyRoomAccessToken({required this.value, required this.expiresAt});
-  final String value;
+  const StudyRoomAccessToken({required this.token, required this.expiresAt});
+  final String token;
   final DateTime expiresAt;
 }
 

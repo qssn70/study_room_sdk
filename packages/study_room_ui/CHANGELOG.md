@@ -1,3 +1,8 @@
+## 0.4.0-rc.1
+
+- Updated the package and examples for `StudyRoomAccessToken.token` and the 0.4 release-candidate SDK.
+- Added optional `StudyRoomView.onResume` and `StudyRoomView.onFinish` callbacks for focus-session controls.
+
 ## 0.4.0-beta.1
 
 - Updated the reusable owner/member flows for the beta SDK token, lifecycle, pagination, and synchronization APIs.

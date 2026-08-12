@@ -7,6 +7,15 @@ import 'package:study_room_sdk/study_room_sdk.dart';
 import 'package:test/test.dart';
 
 void main() {
+  test('access token exposes the public token field', () {
+    final accessToken = StudyRoomAccessToken(
+      token: 'jwt',
+      expiresAt: DateTime.utc(2026, 8, 11, 12),
+    );
+
+    expect(accessToken.token, 'jwt');
+  });
+
   test('configuration rejects invalid URLs', () {
     expect(
       () => StudyRoomSdk(
@@ -154,6 +163,87 @@ void main() {
       await sdk.close();
     },
   );
+
+  test(
+    'unsubscribe evicts room state even when the realtime ack fails',
+    () async {
+      final fixture = await _subscribedSdkFixture();
+      addTearDown(fixture.sdk.close);
+      _expectRoomCachePresent(fixture.sdk);
+      fixture.realtime.connection.failEvent = 'room.unsubscribe';
+
+      await expectLater(
+        fixture.sdk.rooms.unsubscribe('room-1'),
+        throwsA(
+          isA<StateError>().having(
+            (error) => error.message,
+            'message',
+            'room.unsubscribe failed',
+          ),
+        ),
+      );
+
+      expect(
+        fixture.realtime.connection.acks.where(
+          (ack) => ack.$1 == 'room.unsubscribe',
+        ),
+        hasLength(1),
+      );
+      _expectRoomCacheEvicted(fixture.sdk);
+    },
+  );
+
+  for (final operation in ['leave', 'delete']) {
+    test(
+      '$operation succeeds and evicts room state when the realtime ack fails',
+      () async {
+        final fixture = await _subscribedSdkFixture();
+        addTearDown(fixture.sdk.close);
+        _expectRoomCachePresent(fixture.sdk);
+        fixture.realtime.connection.failEvent = 'room.unsubscribe';
+
+        if (operation == 'leave') {
+          await fixture.sdk.members.leave('room-1');
+          expect(
+            fixture.transport.requests,
+            contains(
+              isA<_Request>()
+                  .having((request) => request.method, 'method', 'DELETE')
+                  .having(
+                    (request) => request.path,
+                    'path',
+                    '/v1/rooms/room-1/members/me',
+                  ),
+            ),
+          );
+        } else {
+          await fixture.sdk.rooms.delete('room-1');
+          expect(
+            fixture.transport.requests,
+            contains(
+              isA<_Request>()
+                  .having((request) => request.method, 'method', 'DELETE')
+                  .having(
+                    (request) => request.path,
+                    'path',
+                    '/v1/rooms/room-1',
+                  ),
+            ),
+          );
+        }
+
+        expect(fixture.realtime.connection.acks.last.$1, 'room.unsubscribe');
+        expect(fixture.realtime.connection.acks.last.$2, {'roomId': 'room-1'});
+        expect(
+          fixture.realtime.connection.acks.where(
+            (ack) => ack.$1 == 'room.unsubscribe',
+          ),
+          hasLength(1),
+        );
+        _expectRoomCacheEvicted(fixture.sdk);
+      },
+    );
+  }
 
   test(
     'HTTP transport preserves base path and decodes structured errors',
@@ -632,7 +722,7 @@ void main() {
         apiBaseUri: Uri.parse('https://example.com'),
         realtimeUri: Uri.parse('wss://example.com/v1/realtime'),
         tokenProvider: (_) async =>
-            StudyRoomAccessToken(value: '', expiresAt: DateTime.now()),
+            StudyRoomAccessToken(token: '', expiresAt: DateTime.now()),
         transport: FakeTransport(),
         realtimeConnector: FakeRealtimeConnector(),
       ),
@@ -1004,9 +1094,63 @@ void main() {
   });
 }
 
+Future<
+  ({StudyRoomSdk sdk, FakeTransport transport, FakeRealtimeConnector realtime})
+>
+_subscribedSdkFixture() async {
+  final transport = FakeTransport();
+  final realtime = FakeRealtimeConnector();
+  final sdk = StudyRoomSdk(
+    StudyRoomSdkConfig(
+      apiBaseUri: Uri.parse('https://example.com'),
+      realtimeUri: Uri.parse('wss://example.com/v1/realtime'),
+      tokenProvider: _token,
+      transport: transport,
+      realtimeConnector: realtime,
+    ),
+  );
+  transport.handler = (method, path, body) async {
+    if (path.contains('/active-sessions')) {
+      return {
+        'items': [_sessionJson()],
+        'nextCursor': null,
+      };
+    }
+    if (path.contains('/messages')) {
+      return {
+        'items': [_messageJson()],
+        'nextCursor': null,
+      };
+    }
+    if (path.contains('/join-requests') ||
+        path.startsWith('/v1/join-requests')) {
+      return {'items': <Object>[], 'nextCursor': null};
+    }
+    return _roomJson('room-1');
+  };
+
+  await sdk.start();
+  await sdk.rooms.subscribe('room-1');
+  return (sdk: sdk, transport: transport, realtime: realtime);
+}
+
+void _expectRoomCachePresent(StudyRoomSdk sdk) {
+  expect(sdk.syncState.rooms, contains('room-1'));
+  expect(sdk.syncState.activeSessionsByRoom['room-1'], isNotEmpty);
+  expect(sdk.syncState.recentMessagesByRoom['room-1'], isNotEmpty);
+}
+
+void _expectRoomCacheEvicted(StudyRoomSdk sdk) {
+  expect(sdk.syncState.rooms, isNot(contains('room-1')));
+  expect(sdk.syncState.activeSessionsByRoom, isNot(contains('room-1')));
+  expect(sdk.syncState.recentMessagesByRoom, isNot(contains('room-1')));
+  expect(sdk.syncState.ownerInboxByRoom, isNot(contains('room-1')));
+  expect(sdk.syncState.staleRoomIds, isNot(contains('room-1')));
+}
+
 Future<StudyRoomAccessToken> _token(StudyRoomTokenRequest request) async =>
     StudyRoomAccessToken(
-      value: 'jwt',
+      token: 'jwt',
       expiresAt: DateTime.now().add(const Duration(hours: 1)),
     );
 
@@ -1119,6 +1263,7 @@ class FakeRealtimeConnection implements StudyRoomRealtimeConnection {
       StreamController<StudyRoomConnectionState>.broadcast();
   final acks = <(String, Map<String, dynamic>)>[];
   bool closed = false;
+  String? failEvent;
 
   @override
   Stream<Map<String, dynamic>> get events => eventController.stream;
@@ -1132,6 +1277,7 @@ class FakeRealtimeConnection implements StudyRoomRealtimeConnection {
     StudyRoomCancellationToken? cancellationToken,
   }) async {
     acks.add((event, data));
+    if (event == failEvent) throw StateError('$event failed');
     return {'ok': true};
   }
 

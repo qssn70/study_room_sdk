@@ -1291,7 +1291,7 @@ export interface operations {
     };
 }
 
-export const contractVersion = "0.4.0-beta.1" as const;
+export const contractVersion = "0.4.0-rc.1" as const;
 export const realtimeSchemaVersion = 1 as const;
 
 export type AppIdWire = components["schemas"]["AppId"];

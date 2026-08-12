@@ -56,7 +56,7 @@ class SocketIoStudyRoomRealtimeConnector implements StudyRoomRealtimeConnector {
       socketUrl.toString(),
       io.OptionBuilder()
           .setTransports(['websocket'])
-          .setAuth({'token': token.value})
+          .setAuth({'token': token.token})
           .setAckTimeout(ackTimeout.inMilliseconds)
           .disableAutoConnect()
           .disableReconnection()

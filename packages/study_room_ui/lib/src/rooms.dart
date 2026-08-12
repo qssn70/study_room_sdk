@@ -19,6 +19,8 @@ class StudyRoomView extends StatelessWidget {
     required this.onStart,
     required this.onPause,
     required this.onSendMessage,
+    this.onResume,
+    this.onFinish,
     this.connected = true,
     this.theme = const StudyRoomTheme(),
     this.copy = const StudyRoomCopy(),
@@ -31,6 +33,8 @@ class StudyRoomView extends StatelessWidget {
   final List<ChatMessage> messages;
   final VoidCallback onStart;
   final VoidCallback onPause;
+  final VoidCallback? onResume;
+  final VoidCallback? onFinish;
   final Future<void> Function(String text) onSendMessage;
   final bool connected;
   final StudyRoomTheme theme;
@@ -65,6 +69,8 @@ class StudyRoomView extends StatelessWidget {
                         status: sessionStatus,
                         onStart: onStart,
                         onPause: onPause,
+                        onResume: onResume,
+                        onFinish: onFinish,
                       ),
                       const SizedBox(height: 12),
                       Expanded(
@@ -147,13 +153,16 @@ class RoomHeader extends StatelessWidget {
       child: LayoutBuilder(
         builder: (context, constraints) {
           final largeText = MediaQuery.textScalerOf(context).scale(1) > 1.3;
+          // Keep the trailing member/connection labels from competing with
+          // the title in tablet-sized panes and split-screen layouts.
+          final compact = constraints.maxWidth < 900;
           final titleWidget = Text(
             title,
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
             style: Theme.of(context).textTheme.titleMedium,
           );
-          if (largeText) {
+          if (largeText || compact) {
             return Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisAlignment: MainAxisAlignment.center,

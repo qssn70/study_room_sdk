@@ -2,6 +2,7 @@
 .packages
 .flutter-plugins-dependencies
 build/
+artifacts/
 coverage/
 node_modules/
 dist/
