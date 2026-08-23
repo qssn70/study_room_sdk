@@ -24,7 +24,7 @@ x-api-environment: &api-environment
   OTEL_BSP_MAX_QUEUE_SIZE: ${OTEL_BSP_MAX_QUEUE_SIZE:-2048}
 
 x-api: &api
-  image: ${STUDY_ROOM_SERVER_IMAGE:-study-room-server:0.4.0-rc.1}
+  image: ${STUDY_ROOM_SERVER_IMAGE:-study-room-server:0.4.0}
   environment: *api-environment
   restart: unless-stopped
   depends_on:
@@ -53,7 +53,7 @@ services:
       OTEL_RESOURCE_ATTRIBUTES: service.instance.id=api-2
 
   migrate:
-    image: ${STUDY_ROOM_SERVER_IMAGE:-study-room-server:0.4.0-rc.1}
+    image: ${STUDY_ROOM_SERVER_IMAGE:-study-room-server:0.4.0}
     build:
       context: .
       dockerfile: server/Dockerfile
@@ -66,7 +66,7 @@ services:
 
   seed:
     profiles: ["dev", "test"]
-    image: ${STUDY_ROOM_SERVER_IMAGE:-study-room-server:0.4.0-rc.1}
+    image: ${STUDY_ROOM_SERVER_IMAGE:-study-room-server:0.4.0}
     environment: *api-environment
     command: ["node", "prisma/seed.mjs"]
     depends_on:
@@ -165,7 +165,7 @@ services:
 
   e2e:
     profiles: ["test"]
-    image: ${STUDY_ROOM_SERVER_IMAGE:-study-room-server:0.4.0-rc.1}
+    image: ${STUDY_ROOM_SERVER_IMAGE:-study-room-server:0.4.0}
     user: "0:0"
     environment:
       E2E_API_1: http://api-1:3000

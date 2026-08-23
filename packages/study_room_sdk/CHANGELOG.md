@@ -1,3 +1,8 @@
+## 0.4.0
+
+- Promoted the 0.4 release candidate to the stable release with no additional public API changes.
+- Aligned the SDK and generated contract version with the stable 0.4 contract.
+
 ## 0.4.0-rc.1
 
 - Renamed the public `StudyRoomAccessToken.value` constructor argument and field to `token`; the beta name has no compatibility alias.

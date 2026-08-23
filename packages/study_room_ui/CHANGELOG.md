@@ -1,3 +1,8 @@
+## 0.4.0
+
+- Promoted the 0.4 release candidate to the stable release with no additional public API changes.
+- Updated the `study_room_sdk` dependency and examples to the stable 0.4 release.
+
 ## 0.4.0-rc.1
 
 - Updated the package and examples for `StudyRoomAccessToken.token` and the 0.4 release-candidate SDK.

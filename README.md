@@ -2,7 +2,7 @@
 
 Production-oriented online study rooms for Flutter: a stable Dart SDK, reusable Flutter UI, and a NestJS reference backend backed by PostgreSQL and Redis.
 
-The current release candidate is `0.4.0-rc.1`. It is a breaking replacement for the in-memory 0.3 protocol: REST lives under `/v1`, and the Socket.IO namespace is `/v1/realtime`.
+The current stable release is `0.4.0`. It is a breaking replacement for the in-memory 0.3 protocol: REST lives under `/v1`, and the Socket.IO namespace is `/v1/realtime`.
 
 ## Workspace
 
