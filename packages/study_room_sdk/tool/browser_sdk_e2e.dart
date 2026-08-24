@@ -42,9 +42,13 @@ Future<void> main() async {
     );
 
     await Future.wait([owner.start(), member.start()]);
-    assertions['socketIoConnected'] =
-        ownerStates.contains(StudyRoomConnectionState.connected.name) &&
-        memberStates.contains(StudyRoomConnectionState.connected.name);
+    final connectedClients = await Future.wait([
+      _waitForConnected(owner),
+      _waitForConnected(member),
+    ]);
+    assertions['socketIoConnected'] = connectedClients.every(
+      (connected) => connected,
+    );
 
     final room = await owner.rooms.create(
       'Chrome CORS $runId',
@@ -154,6 +158,17 @@ Future<void> main() async {
   }
 
   _browserResult = jsonEncode(result).toJS;
+}
+
+Future<bool> _waitForConnected(StudyRoomSdk sdk) async {
+  try {
+    await sdk.connectionStates
+        .firstWhere((state) => state == StudyRoomConnectionState.connected)
+        .timeout(const Duration(seconds: 5));
+    return true;
+  } on TimeoutException {
+    return false;
+  }
 }
 
 StudyRoomSdk _sdk(

@@ -44,9 +44,13 @@ Future<void> main() async {
     );
 
     await Future.wait([owner.start(), member.start()]);
-    assertions['clientsConnected'] =
-        ownerStates.contains(StudyRoomConnectionState.connected.name) &&
-        memberStates.contains(StudyRoomConnectionState.connected.name);
+    final connectedClients = await Future.wait([
+      _waitForConnected(owner),
+      _waitForConnected(member),
+    ]);
+    assertions['clientsConnected'] = connectedClients.every(
+      (connected) => connected,
+    );
 
     final roomKey = 'room.$runId';
     final concurrentRooms = await Future.wait([
@@ -230,6 +234,17 @@ Future<void> main() async {
       if (owner != null) owner.close(),
       if (member != null) member.close(),
     ]);
+  }
+}
+
+Future<bool> _waitForConnected(StudyRoomSdk sdk) async {
+  try {
+    await sdk.connectionStates
+        .firstWhere((state) => state == StudyRoomConnectionState.connected)
+        .timeout(const Duration(seconds: 5));
+    return true;
+  } on TimeoutException {
+    return false;
   }
 }
 
