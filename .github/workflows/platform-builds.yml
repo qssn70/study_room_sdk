@@ -48,7 +48,7 @@ jobs:
             command: flutter build ios --release --no-codesign
             artifact_path: apps/example_flutter/build/ios/iphoneos/Runner.app
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - if: matrix.target == 'android'
         uses: actions/setup-java@v4
         with:
