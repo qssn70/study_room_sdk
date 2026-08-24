@@ -1,4 +1,4 @@
-FROM node:22-alpine AS build
+FROM node:26-alpine AS build
 
 WORKDIR /app
 COPY package.json package-lock.json ./
@@ -10,7 +10,7 @@ COPY server ./server
 RUN npm --workspace study-room-server run db:generate \
     && npm --workspace study-room-server run build
 
-FROM node:22-alpine AS runtime
+FROM node:26-alpine AS runtime
 ENV NODE_ENV=production
 WORKDIR /app
 COPY --from=build /app/node_modules ./node_modules
