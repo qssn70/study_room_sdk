@@ -5,14 +5,19 @@ import 'package:http/http.dart' as http;
 
 import 'errors.dart';
 
+/// Cooperative cancellation signal accepted by SDK network operations.
 class StudyRoomCancellationToken {
   final _cancelled = Completer<void>();
+
+  /// Creates a cancellation token, optionally linked to parent tokens.
   StudyRoomCancellationToken([this._parents = const []]);
 
   final List<StudyRoomCancellationToken> _parents;
 
   bool get isCancelled =>
       _cancelled.isCompleted || _parents.any((parent) => parent.isCancelled);
+
+  /// Completes when this token or any linked parent is cancelled.
   Future<void> get whenCancelled => _parents.isEmpty
       ? _cancelled.future
       : Future.any([
@@ -20,15 +25,21 @@ class StudyRoomCancellationToken {
           ..._parents.map((parent) => parent.whenCancelled),
         ]);
 
+  /// Creates one token that observes every non-null token in [tokens].
   static StudyRoomCancellationToken linked(
     Iterable<StudyRoomCancellationToken?> tokens,
   ) => StudyRoomCancellationToken(tokens.nonNulls.toList(growable: false));
 
+  /// Cooperatively cancels operations that received this token.
+  ///
+  /// Cancellation is idempotent and does not forcibly interrupt arbitrary host
+  /// work; SDK transports observe it at supported async boundaries.
   void cancel() {
     if (!_cancelled.isCompleted) _cancelled.complete();
   }
 }
 
+/// JSON HTTP transport abstraction used by [StudyRoomSdk].
 abstract class StudyRoomTransport {
   Future<Map<String, dynamic>?> requestJson(
     String method,
@@ -40,6 +51,7 @@ abstract class StudyRoomTransport {
   Future<void> close();
 }
 
+/// Default abortable HTTP implementation of [StudyRoomTransport].
 class HttpStudyRoomTransport implements StudyRoomTransport {
   HttpStudyRoomTransport(
     this.baseUrl, {

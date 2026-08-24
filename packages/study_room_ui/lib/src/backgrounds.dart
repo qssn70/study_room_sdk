@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+/// Named background preset exposed by the focus settings UI.
 class StudyBackgroundOption {
   const StudyBackgroundOption({
     required this.id,
@@ -33,8 +34,10 @@ const studyFocusDefaultBackground = StudyBackground.gradient(
   maskOpacity: 0.2,
 );
 
+/// Rendering strategy for a [StudyBackground].
 enum StudyBackgroundType { color, image, gradient }
 
+/// Immutable color, image, or gradient focus background configuration.
 class StudyBackground {
   const StudyBackground.color(Color color, {double maskOpacity = 0.35})
     : this._(
@@ -90,6 +93,7 @@ class StudyBackground {
   }
 }
 
+/// Paints a [StudyBackground] and readability mask behind its child.
 class StudyBackgroundLayer extends StatelessWidget {
   const StudyBackgroundLayer({
     required this.background,
@@ -149,6 +153,7 @@ class StudyBackgroundLayer extends StatelessWidget {
   }
 }
 
+/// Read-only preview of the selected background and mask opacity.
 class BackgroundSettingsView extends StatelessWidget {
   const BackgroundSettingsView({required this.background, super.key});
 

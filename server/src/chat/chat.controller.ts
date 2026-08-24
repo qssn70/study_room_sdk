@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Post, Query } from '@nestjs/common';
+import { Body, Controller, Get, Headers, Param, Post, Query } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { CurrentIdentity } from '../auth/current-identity.decorator';
 import { ExternalIdentity } from '../domain';
@@ -31,9 +31,23 @@ export class ChatController {
     @Param() params: SendMessageParamsDto,
     @CurrentIdentity() identity: ExternalIdentity,
     @Body() body: SendMessageBodyDto,
+    @Headers('idempotency-key') idempotencyKey?: string,
   ) {
-    const message = await this.chat.send(params.roomId, identity, body.text);
-    this.realtime.publishRoom(identity.appId, params.roomId, 'chat.message.created', message, null);
-    return message;
+    const result = await this.chat.sendIdempotent(
+      params.roomId,
+      identity,
+      body.text,
+      idempotencyKey,
+    );
+    if (result.created) {
+      this.realtime.publishRoom(
+        identity.appId,
+        params.roomId,
+        'chat.message.created',
+        result.value,
+        null,
+      );
+    }
+    return result.value;
   }
 }

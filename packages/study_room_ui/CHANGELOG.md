@@ -1,3 +1,8 @@
+## 0.4.1
+
+- Added atomic SharedPreferences mutations across Store instances and backup/import support.
+- Updated the workspace quality baseline to lints 6.
+
 ## 0.4.0
 
 - Promoted the 0.4 release candidate to the stable release with no additional public API changes.

@@ -6,3 +6,6 @@ workspace:
   - packages/study_room_sdk
   - packages/study_room_ui
   - apps/example_flutter
+
+dev_dependencies:
+  lints: ^6.0.0

@@ -2,7 +2,7 @@
 
 Production-oriented online study rooms for Flutter: a stable Dart SDK, reusable Flutter UI, and a NestJS reference backend backed by PostgreSQL and Redis.
 
-The current stable release is `0.4.0`. It is a breaking replacement for the in-memory 0.3 protocol: REST lives under `/v1`, and the Socket.IO namespace is `/v1/realtime`.
+The current stable release is `0.4.1`. It is backward compatible with 0.4.0 and keeps REST under `/v1` and the Socket.IO namespace at `/v1/realtime`.
 
 ## Workspace
 
@@ -49,9 +49,12 @@ final sdk = StudyRoomSdk(
 );
 
 await sdk.start();
-final room = await sdk.rooms.create('Exam preparation');
+final room = await sdk.rooms.create(
+  'Exam preparation',
+  idempotencyKey: retryKey,
+);
 await sdk.rooms.subscribe(room.id);
-await sdk.chat.send(room.id, 'Hello');
+await sdk.chat.send(room.id, 'Hello', idempotencyKey: messageRetryKey);
 await sdk.close();
 ```
 
@@ -72,14 +75,15 @@ The focus UI defaults to a bundled offline gradient and performs no background n
 ```sh
 npm ci
 npm run check:contracts
+npm run check:release-versions -- 0.4.1
 npm run build
 npm test
-dart analyze
+npm run analyze:all
 dart test packages/study_room_sdk
 flutter test packages/study_room_ui
-flutter analyze apps/example_flutter
+npm run doc:check
 ```
 
-See [getting started](docs/getting-started.md), [deployment](docs/deployment.md), [realtime events](docs/realtime-events.md), and the [0.3 migration guide](docs/migration-0.3-to-0.4.md).
+See [getting started](docs/getting-started.md), [backup and idempotency](docs/data-backup-and-idempotency.md), [deployment](docs/deployment.md), [realtime events](docs/realtime-events.md), and the [0.3 migration guide](docs/migration-0.3-to-0.4.md).
 
 The Flutter packages use Apache-2.0. The reference server and repository-level code use GPL-3.0-only. This project does not publish packages as part of its CI.

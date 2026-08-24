@@ -17,6 +17,12 @@ export class MetricsService {
     labelNames: ['method', 'route', 'status'] as const,
     registers: [this.registry],
   });
+  readonly idempotencyRequests = new Counter({
+    name: 'study_room_idempotency_requests_total',
+    help: 'Idempotent create outcomes by low-cardinality operation.',
+    labelNames: ['operation', 'outcome'] as const,
+    registers: [this.registry],
+  });
 
   constructor() {
     collectDefaultMetrics({ register: this.registry, prefix: 'study_room_' });

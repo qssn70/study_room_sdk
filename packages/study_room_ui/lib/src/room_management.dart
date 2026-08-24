@@ -5,6 +5,7 @@ import 'package:study_room_sdk/study_room_sdk.dart';
 
 import 'localizations.dart';
 
+/// Lists rooms and personal join requests with create and request actions.
 class StudyRoomLobbyView extends StatefulWidget {
   const StudyRoomLobbyView({
     required this.sdk,
@@ -119,14 +120,17 @@ class _StudyRoomLobbyViewState extends State<StudyRoomLobbyView> {
       ),
     );
     controller.dispose();
-    if (roomId == null || roomId.isEmpty) return;
+    if (roomId == null || roomId.isEmpty) {
+      return;
+    }
     await _run(() async {
       await widget.sdk.joinRequests.request(roomId);
       await _load();
-      if (mounted)
+      if (mounted) {
         ScaffoldMessenger.of(
           context,
         ).showSnackBar(SnackBar(content: Text(copy.requestSubmitted)));
+      }
     });
   }
 
@@ -215,10 +219,7 @@ class _StudyRoomLobbyViewState extends State<StudyRoomLobbyView> {
           Text(copy.myRequests, style: Theme.of(context).textTheme.titleLarge),
           const SizedBox(height: 8),
           if (_requests.isEmpty)
-            Text(
-              copy.noRequests,
-              style: Theme.of(context).textTheme.bodyMedium,
-            )
+            Text(copy.noRequests, style: Theme.of(context).textTheme.bodyMedium)
           else
             ..._requests.map(
               (request) => ListTile(
@@ -242,6 +243,7 @@ class _StudyRoomLobbyViewState extends State<StudyRoomLobbyView> {
   }
 }
 
+/// Owner-facing inbox for approving or rejecting room join requests.
 class JoinRequestInboxView extends StatefulWidget {
   const JoinRequestInboxView({
     required this.sdk,
@@ -270,13 +272,16 @@ class _JoinRequestInboxViewState extends State<JoinRequestInboxView> {
   Future<void> _load() async {
     try {
       final page = await widget.sdk.joinRequests.forRoom(widget.roomId);
-      if (mounted)
+      if (mounted) {
         setState(() {
           _requests = page.items;
           _error = null;
         });
+      }
     } catch (error) {
-      if (mounted) setState(() => _error = error);
+      if (mounted) {
+        setState(() => _error = error);
+      }
     }
   }
 
@@ -292,12 +297,14 @@ class _JoinRequestInboxViewState extends State<JoinRequestInboxView> {
   @override
   Widget build(BuildContext context) {
     final copy = StudyRoomLocalizations.of(context);
-    if (_requests == null && _error == null)
+    if (_requests == null && _error == null) {
       return const Center(child: CircularProgressIndicator());
-    if (_error != null)
+    }
+    if (_error != null) {
       return Center(
         child: FilledButton(onPressed: _load, child: Text(copy.retry)),
       );
+    }
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
@@ -338,6 +345,7 @@ class _JoinRequestInboxViewState extends State<JoinRequestInboxView> {
   }
 }
 
+/// Owner-facing member removal and ownership-transfer controls.
 class RoomMemberManagementView extends StatefulWidget {
   const RoomMemberManagementView({
     required this.sdk,

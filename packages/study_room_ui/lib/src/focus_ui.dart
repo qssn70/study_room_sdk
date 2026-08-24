@@ -1,5 +1,3 @@
-library study_room_ui;
-
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -24,6 +22,11 @@ export 'focus_api.dart'
         StudyTaskEditor;
 export 'standalone_focus_views.dart' show PomodoroTimerView, TodayGoalView;
 
+/// Six-platform focus workspace with scoped local persistence by default.
+///
+/// A host-supplied [StudyStore] remains owned by the host and is never disposed
+/// by this widget. Without one, the widget creates a scope from
+/// [currentUserId] and [localStorageNamespace] using SharedPreferences.
 class StudyFocusKitView extends StatefulWidget {
   const StudyFocusKitView({
     this.store,

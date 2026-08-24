@@ -1,0 +1,126 @@
+name: 0.4.1 candidate release
+
+on:
+  push:
+    tags:
+      - 'v0.4.*'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: candidate-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate_versions:
+    name: Validate release version alignment
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run generate:contracts
+      - run: npm run check:release-versions -- "${GITHUB_REF_NAME#v}"
+      - name: Reject generated artifact drift
+        shell: bash
+        run: |
+          set -euo pipefail
+          status="$(git status --porcelain --untracked-files=all -- \
+            server/src/generated/contract-types.ts \
+            server/src/generated/request-dtos.ts \
+            packages/study_room_sdk/lib/src/generated_contract.dart)"
+          test -z "$status" || { echo "$status"; exit 1; }
+
+  ci:
+    needs: validate_versions
+    uses: ./.github/workflows/ci.yml
+    with:
+      update_goldens: false
+
+  compose:
+    needs: validate_versions
+    uses: ./.github/workflows/integration.yml
+
+  example_smoke:
+    needs: validate_versions
+    uses: ./.github/workflows/platform-builds.yml
+
+  candidate_artifacts:
+    name: Build OCI, SBOM, checksums, and manifest
+    needs: validate_versions
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build local server image for SBOM
+        run: docker build --tag "study-room-server:${GITHUB_REF_NAME}" --file server/Dockerfile .
+      - name: Export OCI image archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/candidate
+          docker buildx build \
+            --file server/Dockerfile \
+            --output "type=oci,dest=artifacts/candidate/study-room-server-${GITHUB_REF_NAME#v}.oci.tar" \
+            .
+      - name: Generate SPDX JSON SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          image: study-room-server:${{ github.ref_name }}
+          format: spdx-json
+          output-file: artifacts/candidate/study-room-server-${{ github.ref_name }}.spdx.json
+          upload-artifact: false
+      - name: Generate version manifest and SHA-256 checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          mv "artifacts/candidate/study-room-server-${GITHUB_REF_NAME}.spdx.json" \
+            "artifacts/candidate/study-room-server-${version}.spdx.json"
+          node tool/create_release_manifest.mjs artifacts/candidate/version-manifest.json
+          (cd artifacts/candidate && sha256sum \
+            "study-room-server-${version}.oci.tar" \
+            "study-room-server-${version}.spdx.json" \
+            version-manifest.json > SHA256SUMS)
+          test -s artifacts/candidate/SHA256SUMS
+          test -s artifacts/candidate/version-manifest.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: candidate-server-${{ github.ref_name }}
+          path: artifacts/candidate
+          if-no-files-found: error
+          retention-days: 30
+
+  draft_release:
+    name: Create draft GitHub Release
+    needs: [ci, compose, example_smoke, candidate_artifacts]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: candidate-server-${{ github.ref_name }}
+          path: artifacts/candidate
+      - name: Verify candidate artifact set
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          test -s "artifacts/candidate/study-room-server-${version}.oci.tar"
+          test -s "artifacts/candidate/study-room-server-${version}.spdx.json"
+          test -s artifacts/candidate/SHA256SUMS
+          test -s artifacts/candidate/version-manifest.json
+          (cd artifacts/candidate && sha256sum --check SHA256SUMS)
+      - name: Create draft release with server candidate artifacts only
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          generate_release_notes: true
+          files: |
+            artifacts/candidate/*.oci.tar
+            artifacts/candidate/*.spdx.json
+            artifacts/candidate/SHA256SUMS
+            artifacts/candidate/version-manifest.json

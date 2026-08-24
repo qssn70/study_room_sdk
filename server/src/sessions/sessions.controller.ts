@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Patch, Post, Query } from '@nestjs/common';
+import { Body, Controller, Get, Headers, Param, Patch, Post, Query } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { CurrentIdentity } from '../auth/current-identity.decorator';
 import { ExternalIdentity } from '../domain';
@@ -24,11 +24,27 @@ export class SessionsController {
   ) {}
 
   @Post('rooms/:roomId/sessions')
-  async start(@Param() params: StartSessionParamsDto, @CurrentIdentity() identity: ExternalIdentity) {
-    const session = await this.sessions.start(params.roomId, identity);
-    this.realtime.publishRoom(identity.appId, params.roomId, 'session.updated', session, null);
-    await this.publishPresence(identity, params.roomId);
-    return session;
+  async start(
+    @Param() params: StartSessionParamsDto,
+    @CurrentIdentity() identity: ExternalIdentity,
+    @Headers('idempotency-key') idempotencyKey?: string,
+  ) {
+    const result = await this.sessions.startIdempotent(
+      params.roomId,
+      identity,
+      idempotencyKey,
+    );
+    if (result.created) {
+      this.realtime.publishRoom(
+        identity.appId,
+        params.roomId,
+        'session.updated',
+        result.value,
+        null,
+      );
+      await this.publishPresence(identity, params.roomId);
+    }
+    return result.value;
   }
 
   @Get('rooms/:roomId/active-sessions')

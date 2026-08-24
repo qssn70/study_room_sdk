@@ -1,3 +1,4 @@
+/// High-level categories used to classify SDK failures.
 enum StudyRoomExceptionKind {
   configuration,
   authentication,
@@ -13,6 +14,7 @@ enum StudyRoomExceptionKind {
   server,
 }
 
+/// Structured SDK exception with retry, HTTP, and request-correlation details.
 class StudyRoomException implements Exception {
   const StudyRoomException(
     this.message, {
@@ -43,12 +45,8 @@ class StudyRoomException implements Exception {
   String toString() => 'StudyRoomException($kind, $code, $message)';
 }
 
+/// Backward-compatible named subtype of [StudyRoomException].
 class StudyRoomError extends StudyRoomException {
-  const StudyRoomError(String message, {String? code, Object? cause})
-    : super(
-        message,
-        kind: StudyRoomExceptionKind.validation,
-        code: code,
-        cause: cause,
-      );
+  const StudyRoomError(super.message, {super.code, super.cause})
+    : super(kind: StudyRoomExceptionKind.validation);
 }

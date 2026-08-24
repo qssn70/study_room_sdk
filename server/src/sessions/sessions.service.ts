@@ -1,5 +1,9 @@
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma, SessionStatus } from '@prisma/client';
+import {
+  IdempotencyService,
+  IdempotentResult,
+} from '../common/idempotency.service';
 import { ExternalIdentity, StudySessionDto, StudySessionStatus } from '../domain';
 import { PrismaService } from '../prisma/prisma.service';
 import { RoomsService } from '../rooms/rooms.service';
@@ -9,15 +13,51 @@ export class SessionsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly rooms: RoomsService,
+    private readonly idempotency?: IdempotencyService,
   ) {}
 
   async start(roomId: string, identity: ExternalIdentity): Promise<StudySessionDto> {
     await this.rooms.requireMember(roomId, identity);
     try {
-      const session = await this.prisma.$transaction((tx) => tx.studySession.create({
-          data: { roomId, appId: identity.appId, userId: identity.userId },
-        }));
+      const session = await this.prisma.$transaction((tx) =>
+        this.createSession(tx, roomId, identity),
+      );
       return this.toDto(session);
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+        throw new ConflictException('An active study session already exists');
+      }
+      throw error;
+    }
+  }
+
+  async startIdempotent(
+    roomId: string,
+    identity: ExternalIdentity,
+    idempotencyKey?: string,
+  ): Promise<IdempotentResult<StudySessionDto>> {
+    if (idempotencyKey === undefined) {
+      return { value: await this.start(roomId, identity), created: true };
+    }
+    await this.rooms.requireMember(roomId, identity);
+    if (!this.idempotency) throw new Error('IdempotencyService is unavailable');
+    try {
+      return await this.idempotency.execute({
+        appId: identity.appId,
+        userId: identity.userId,
+        operation: 'sessions.start',
+        key: idempotencyKey,
+        request: { roomId },
+        create: async (tx, resourceId) => this.toDto(
+          await this.createSession(tx, roomId, identity, resourceId),
+        ),
+        replay: async (resourceId) => {
+          const session = await this.prisma.studySession.findFirst({
+            where: { id: resourceId, appId: identity.appId },
+          });
+          return session ? this.toDto(session) : undefined;
+        },
+      });
     } catch (error) {
       if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
         throw new ConflictException('An active study session already exists');
@@ -99,5 +139,31 @@ export class SessionsService {
       finishedAt: session.finishedAt?.toISOString() ?? null,
       updatedAt: session.updatedAt.toISOString(),
     };
+  }
+
+  private async createSession(
+    tx: Prisma.TransactionClient,
+    roomId: string,
+    identity: ExternalIdentity,
+    id?: string,
+  ) {
+    const session = await tx.studySession.create({
+      data: {
+        ...(id === undefined ? {} : { id }),
+        roomId,
+        appId: identity.appId,
+        userId: identity.userId,
+      },
+    });
+    await tx.auditLog.create({
+      data: {
+        appId: identity.appId,
+        actorId: identity.userId,
+        action: 'session.started',
+        resourceId: session.id,
+        metadata: { roomId },
+      },
+    });
+    return session;
   }
 }

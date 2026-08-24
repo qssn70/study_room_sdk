@@ -5,8 +5,10 @@ import 'package:just_audio/just_audio.dart';
 
 import 'localizations.dart';
 
+/// Location type used to resolve a [StudySoundTrack].
 enum StudySoundSourceType { asset, network, file, uri }
 
+/// Describes a selectable background sound and its playback source.
 class StudySoundTrack {
   const StudySoundTrack.asset({
     required this.id,
@@ -70,6 +72,7 @@ class StudySoundTrack {
   ];
 }
 
+/// Host-replaceable playback boundary used by focus sound controls.
 abstract class StudySoundPlayer {
   Future<void> play(StudySoundTrack track, {double volume = 0.5});
 
@@ -80,6 +83,7 @@ abstract class StudySoundPlayer {
   Future<void> dispose();
 }
 
+/// Default [StudySoundPlayer] backed by `just_audio`.
 class JustAudioStudySoundPlayer implements StudySoundPlayer {
   JustAudioStudySoundPlayer({AudioPlayer? player})
     : _player = player ?? AudioPlayer();
@@ -114,6 +118,7 @@ class JustAudioStudySoundPlayer implements StudySoundPlayer {
   Future<void> dispose() => _player.dispose();
 }
 
+/// Interactive sound selector with play, pause, and volume controls.
 class BackgroundSoundView extends StatefulWidget {
   const BackgroundSoundView({
     this.tracks = StudySoundTrack.builtIns,

@@ -6,6 +6,7 @@ import 'package:study_room_sdk/study_room_sdk.dart';
 import 'focus_formatters.dart';
 import 'localizations.dart';
 
+/// Standalone controls and live state for a [PomodoroController].
 class PomodoroTimerView extends StatefulWidget {
   const PomodoroTimerView({required this.controller, super.key});
 
@@ -114,6 +115,7 @@ class _PomodoroTimerViewState extends State<PomodoroTimerView> {
   }
 }
 
+/// Editor for one date's [TodayGoal] in a [StudyStore].
 class TodayGoalView extends StatefulWidget {
   const TodayGoalView({required this.store, required this.date, super.key});
 

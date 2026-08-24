@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Study Room API
-  version: 0.4.0
+  version: 0.4.1
   description: Authoritative HTTP contract for the Study Room reference backend.
 servers:
   - url: http://localhost:3000
@@ -129,6 +129,8 @@ paths:
       tags: [Rooms]
       operationId: createRoom
       security: [{ userBearer: [] }]
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
         required: true
         content:
@@ -143,7 +145,7 @@ paths:
               schema: { $ref: '#/components/schemas/Room' }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
-        '409': { $ref: '#/components/responses/Conflict' }
+        '409': { $ref: '#/components/responses/IdempotencyConflict' }
         '429': { $ref: '#/components/responses/TooManyRequests' }
         '503': { $ref: '#/components/responses/ServiceUnavailable' }
         '500': { $ref: '#/components/responses/InternalServerError' }
@@ -383,6 +385,8 @@ paths:
       tags: [Chat]
       operationId: sendMessage
       security: [{ userBearer: [] }]
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
         required: true
         content:
@@ -399,6 +403,7 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/IdempotencyConflict' }
         '429': { $ref: '#/components/responses/TooManyRequests' }
         '503': { $ref: '#/components/responses/ServiceUnavailable' }
         '500': { $ref: '#/components/responses/InternalServerError' }
@@ -409,6 +414,8 @@ paths:
       tags: [Sessions]
       operationId: startSession
       security: [{ userBearer: [] }]
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
       responses:
         '201':
           description: Session
@@ -420,7 +427,7 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
-        '409': { $ref: '#/components/responses/Conflict' }
+        '409': { $ref: '#/components/responses/IdempotencyConflict' }
         '429': { $ref: '#/components/responses/TooManyRequests' }
         '503': { $ref: '#/components/responses/ServiceUnavailable' }
         '500': { $ref: '#/components/responses/InternalServerError' }
@@ -570,6 +577,14 @@ components:
       name: limit
       in: query
       schema: { type: integer, minimum: 1, maximum: 100, default: 50 }
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: false
+      description: Reuse the same key only for retries of the same normalized create request. Records expire after 24 hours.
+      schema:
+        type: string
+        pattern: '^[A-Za-z0-9._:-]{1,128}$'
   headers:
     RequestId:
       description: Request correlation identifier
@@ -598,6 +613,15 @@ components:
       description: Resource state conflict
       headers: { x-request-id: { $ref: '#/components/headers/RequestId' } }
       content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } }
+    IdempotencyConflict:
+      description: Resource state conflict or idempotency-key conflict
+      headers: { x-request-id: { $ref: '#/components/headers/RequestId' } }
+      content:
+        application/json:
+          schema:
+            anyOf:
+              - $ref: '#/components/schemas/ErrorResponse'
+              - $ref: '#/components/schemas/IdempotencyErrorResponse'
     TooManyRequests:
       description: Rate limit exceeded
       headers:
@@ -798,6 +822,17 @@ components:
       required: [code, message, requestId]
       properties:
         code: { type: string, minLength: 1 }
+        message: { type: string, minLength: 1 }
+        details: {}
+        requestId: { type: string, minLength: 1, maxLength: 128 }
+    IdempotencyErrorResponse:
+      type: object
+      additionalProperties: false
+      required: [code, message, requestId]
+      properties:
+        code:
+          type: string
+          enum: [idempotency_conflict, idempotency_result_unavailable]
         message: { type: string, minLength: 1 }
         details: {}
         requestId: { type: string, minLength: 1, maxLength: 128 }

@@ -4,6 +4,7 @@ import 'package:study_room_sdk/study_room_sdk.dart';
 import 'localizations.dart';
 import 'room_style.dart';
 
+/// Message list and composer for a study room chat surface.
 class ChatPanel extends StatefulWidget {
   const ChatPanel({
     required this.messages,

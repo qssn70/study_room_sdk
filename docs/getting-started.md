@@ -34,10 +34,17 @@ final sdk = StudyRoomSdk(
 );
 
 await sdk.start();
-final created = await sdk.rooms.create('Focus room');
+final created = await sdk.rooms.create(
+  'Focus room',
+  idempotencyKey: createRetryKey,
+);
 await sdk.rooms.subscribe(created.id);
 await sdk.setAway(created.id, false);
-await sdk.chat.send(created.id, 'Ready to study');
+await sdk.chat.send(
+  created.id,
+  'Ready to study',
+  idempotencyKey: messageRetryKey,
+);
 final messages = await sdk.chat.history(created.id, limit: 50);
 final activeSessions = await sdk.sessions.listActive(created.id);
 ```
@@ -49,6 +56,12 @@ Always close the SDK with the host lifecycle:
 ```dart
 await sdk.close();
 ```
+
+`start()` is safe to await repeatedly while the SDK is running. `close()` is
+idempotent but terminal; construct a new SDK after closing. Pass a
+`StudyRoomCancellationToken` to cancel supported network and lifecycle work.
+Temporary disconnects trigger bounded reconnect, room resubscription, and an
+authoritative REST resynchronization.
 
 ## Add reusable UI
 
@@ -64,5 +77,8 @@ MaterialApp(
 ```
 
 Use `JoinRequestInboxView` for owners and `RoomMemberManagementView` for member removal and ownership transfer. `StudyFocusKitView` remains local-first and preserves the 0.3 SharedPreferences keys for the same `localStorageNamespace` and `currentUserId`.
+
+For local export/import and retry-key rules, see
+[backup and idempotency](data-backup-and-idempotency.md).
 
 See the example application for the owner/member route and the [migration guide](migration-0.3-to-0.4.md) for all breaking API changes.

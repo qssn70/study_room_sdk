@@ -4,6 +4,7 @@ import 'package:study_room_sdk/study_room_sdk.dart';
 import 'focus_store_builder.dart';
 import 'localizations.dart';
 
+/// Compact cards for today's duration, Pomodoro count, and current streak.
 class StudyStatsView extends StatelessWidget {
   const StudyStatsView({required this.store, required this.date, super.key});
 
@@ -48,6 +49,7 @@ class StudyStatsView extends StatelessWidget {
   }
 }
 
+/// Loads and displays personal study statistics from a [StudyStore].
 class StudyAnalyticsView extends StatelessWidget {
   const StudyAnalyticsView({
     required this.store,
@@ -131,6 +133,7 @@ class StudyAnalyticsView extends StatelessWidget {
   }
 }
 
+/// Loads a day, week, or month [StudyReport] and renders its summary.
 class StudyReportView extends StatelessWidget {
   const StudyReportView({
     required this.store,

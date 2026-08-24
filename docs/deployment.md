@@ -4,7 +4,7 @@
 
 The included Compose topology is nginx → two stateless API instances → PostgreSQL and Redis. Redis carries Socket.IO adapter traffic, application invalidation, and presence keys. PostgreSQL is authoritative for applications, users, rooms, memberships, approvals, sessions, messages, and audit logs.
 
-Use an external managed PostgreSQL/Redis service in production. Run `prisma migrate deploy` once before replacing API instances. Do not mix 0.3 and 0.4 instances behind one endpoint.
+Use an external managed PostgreSQL/Redis service in production. Run `prisma migrate deploy` once before replacing API instances. The 0.4.1 migration creates the idempotency record table and must complete before any 0.4.1 instance starts. Upgrade all server instances before recommending idempotency keys to clients. Do not mix 0.3 and 0.4 instances behind one endpoint.
 
 ## Tenant-integrity migration rehearsal
 
@@ -38,7 +38,7 @@ Optional controls:
 - `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` and `OTEL_SERVICE_NAME`: enable OTLP HTTP traces.
 - `STUDY_ROOM_ALLOW_INSECURE_JWKS=true`: permits HTTP JWKS only when the runtime profile is explicitly `dev` or `test`, and only for localhost, loopback addresses, or the Compose `jwks` host. Production rejects HTTP regardless of this flag.
 
-Every registered application supplies its own issuer, audience, JWKS URI, enabled state, and nullable chat/session retention days. `null` means permanent retention. The daily 03:00 cleanup uses a PostgreSQL advisory transaction lock, so only one instance deletes expired rows.
+Every registered application supplies its own issuer, audience, JWKS URI, enabled state, and nullable chat/session retention days. `null` means permanent retention. The daily 03:00 cleanup uses a PostgreSQL advisory transaction lock, so only one instance deletes expired rows. The same locked task removes idempotency records older than 24 hours.
 
 Startup validates the administrator JWKS URI and every persisted application JWKS URI before accepting traffic. An existing HTTP registration therefore prevents a production-profile instance from starting until the registration is repaired.
 

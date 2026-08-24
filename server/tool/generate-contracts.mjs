@@ -417,7 +417,7 @@ const dartFactoryCases = realtimeVariants.map(({ definitionName, type, payloadTy
   `        occurredAt: json['occurredAt'] as String,\n` +
   `        payload: ${payloadType}.fromJson(_wireObject(json['payload'])),\n` +
   `      ),`).join('\n');
-const dart = `// coverage:ignore-file\n// GENERATED FILE. Run npm run generate:contracts; do not edit.\n` +
+const dart = `// coverage:ignore-file\n// GENERATED FILE. Run npm run generate:contracts; do not edit.\n// dart format off\n` +
   `const studyRoomContractVersion = ${JSON.stringify(openapi.info.version)};\n` +
   `const studyRoomRealtimeSchemaVersion = ${realtime.properties.schemaVersion.const};\n` +
   `const studyRoomRealtimeEventTypes = <String>{\n` +
@@ -444,7 +444,7 @@ const dart = `// coverage:ignore-file\n// GENERATED FILE. Run npm run generate:c
   `      final ChatMessageWire value => value.toJson(),\n` +
   `      final StudySessionWire value => value.toJson(),\n` +
   `      _ => throw StateError('Unsupported realtime payload'),\n    },\n  };\n}\n\n` +
-  `${dartRealtimeVariants}\n`;
+  `${dartRealtimeVariants}\n// dart format on\n`;
 
 async function output(path, expected) {
   if (process.argv.includes('--check')) {

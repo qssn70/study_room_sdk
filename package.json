@@ -1,16 +1,20 @@
 {
   "name": "study-room-sdk-workspace",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "private": true,
   "scripts": {
     "demo": "cd apps/example_flutter && flutter run -d chrome",
     "test:demo": "cd apps/example_flutter && flutter test",
     "test": "npm --workspace study-room-server test",
     "test:all": "npm --workspace study-room-server test && cd packages/study_room_sdk && dart test && cd ../study_room_ui && flutter test && cd ../../apps/example_flutter && flutter test",
-    "analyze:all": "cd packages/study_room_sdk && dart analyze && cd ../study_room_ui && flutter analyze && cd ../../apps/example_flutter && flutter analyze",
+    "analyze:all": "cd packages/study_room_sdk && dart analyze --fatal-infos && cd ../study_room_ui && flutter analyze --fatal-infos && cd example && flutter analyze --fatal-infos && cd ../../../apps/example_flutter && flutter analyze --fatal-infos",
+    "format:check": "dart format --output=none --set-exit-if-changed packages apps",
+    "doc:check": "cd packages/study_room_sdk && dart doc --validate-links && cd ../study_room_ui && dart doc --validate-links",
+    "check:docs:links": "node tool/check_markdown_links.mjs",
     "build": "npm --workspace study-room-server run build",
     "check:contracts": "npm --workspace study-room-server run check:contracts",
-    "generate:contracts": "npm --workspace study-room-server run generate:contracts"
+    "generate:contracts": "npm --workspace study-room-server run generate:contracts",
+    "check:release-versions": "node tool/check_release_versions.mjs"
   },
   "overrides": {
     "@nestjs/platform-express": {

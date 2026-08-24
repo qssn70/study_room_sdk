@@ -38,6 +38,7 @@ model Application {
   users                TenantUser[]
   rooms                Room[]
   auditLogs            AuditLog[]
+  idempotencyRecords   IdempotencyRecord[]
 
   @@map("applications")
 }
@@ -55,6 +56,7 @@ model TenantUser {
   decidedJoinRequests JoinRequest[]    @relation("JoinRequestDecider")
   sessions            StudySession[]
   messages            ChatMessage[]
+  idempotencyRecords  IdempotencyRecord[]
 
   @@id([appId, userId])
   @@map("tenant_users")
@@ -153,4 +155,20 @@ model AuditLog {
 
   @@index([appId, createdAt])
   @@map("audit_logs")
+}
+
+model IdempotencyRecord {
+  appId        String      @map("app_id") @db.VarChar(64)
+  userId       String      @map("user_id")
+  operation    String      @db.VarChar(64)
+  key          String      @db.VarChar(128)
+  requestHash  String      @map("request_hash") @db.VarChar(64)
+  resourceId   String      @map("resource_id") @db.Uuid
+  createdAt    DateTime    @default(now()) @map("created_at")
+  application  Application @relation(fields: [appId], references: [appId], onDelete: Cascade)
+  user         TenantUser   @relation(fields: [appId, userId], references: [appId, userId], onDelete: Cascade)
+
+  @@id([appId, userId, operation, key])
+  @@index([createdAt])
+  @@map("idempotency_records")
 }

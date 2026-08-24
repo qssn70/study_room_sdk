@@ -18,6 +18,16 @@ describe('database tenant and owner integrity migration', () => {
     ),
     'utf8',
   );
+  const idempotencyMigration = readFileSync(
+    resolve(
+      serverRoot,
+      'prisma',
+      'migrations',
+      '20260824000100_idempotency_records',
+      'migration.sql',
+    ),
+    'utf8',
+  );
 
   it('models every room child relation with the tenant discriminator', () => {
     expect(schema).toContain('@@unique([id, appId], map: "rooms_id_app_id_key")');
@@ -76,5 +86,19 @@ describe('database tenant and owner integrity migration', () => {
     expect(migration).toContain('"chat_retention_days" BETWEEN 1 AND 36500');
     expect(migration).toContain('"session_retention_days" BETWEEN 1 AND 36500');
     expect(migration).toContain('DROP CONSTRAINT "applications_chat_retention_positive"');
+  });
+
+  it('isolates idempotency keys by tenant, user, and operation', () => {
+    expect(schema).toContain('@@id([appId, userId, operation, key])');
+    expect(schema).toContain('@@index([createdAt])');
+    expect(idempotencyMigration).toContain(
+      'PRIMARY KEY ("app_id", "user_id", "operation", "key")',
+    );
+    expect(idempotencyMigration).toContain(
+      "CHECK (\"operation\" IN ('rooms.create', 'chat.send', 'sessions.start'))",
+    );
+    expect(idempotencyMigration).toContain(
+      'FOREIGN KEY ("app_id", "user_id") REFERENCES "tenant_users"',
+    );
   });
 });

@@ -6,6 +6,7 @@ import 'errors.dart';
 import 'models.dart';
 import 'transport.dart';
 
+/// Creates authenticated realtime connections for the SDK lifecycle.
 abstract class StudyRoomRealtimeConnector {
   Future<StudyRoomRealtimeConnection> connect(
     Uri url, {
@@ -14,6 +15,7 @@ abstract class StudyRoomRealtimeConnector {
   });
 }
 
+/// Active realtime connection used for events and acknowledgement commands.
 abstract class StudyRoomRealtimeConnection {
   Stream<Map<String, dynamic>> get events;
   Stream<StudyRoomConnectionState> get states;
@@ -28,6 +30,7 @@ abstract class StudyRoomRealtimeConnection {
 // The concrete socket.io adapter is exercised by the two-instance integration test;
 // unit coverage starts again at the transport-independent SDK facade.
 // coverage:ignore-start
+/// Socket.IO realtime connector used by default by [StudyRoomSdk].
 class SocketIoStudyRoomRealtimeConnector implements StudyRoomRealtimeConnector {
   const SocketIoStudyRoomRealtimeConnector({
     this.ackTimeout = const Duration(seconds: 5),
@@ -106,8 +109,9 @@ class _SocketIoStudyRoomRealtimeConnection
       if (!_states.isClosed) _states.add(StudyRoomConnectionState.disconnected);
     });
     _socket.on('study-room.event', (dynamic value) {
-      if (!_events.isClosed && value is Map)
+      if (!_events.isClosed && value is Map) {
         _events.add(Map<String, dynamic>.from(value));
+      }
     });
     _socket.on('study-room.auth-expired', (_) {
       if (!_states.isClosed) _states.add(StudyRoomConnectionState.refreshing);

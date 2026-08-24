@@ -16,6 +16,14 @@ export class RetentionService {
         Prisma.sql`SELECT pg_try_advisory_xact_lock(193701481) AS locked`,
       );
       if (!lock?.locked) return;
+      const expiredIdempotency = await tx.idempotencyRecord.deleteMany({
+        where: { createdAt: { lt: new Date(Date.now() - 86_400_000) } },
+      });
+      if (expiredIdempotency.count) {
+        this.logger.log(
+          `Deleted ${expiredIdempotency.count} expired idempotency records`,
+        );
+      }
       const applications = await tx.application.findMany({
         where: {
           OR: [{ chatRetentionDays: { not: null } }, { sessionRetentionDays: { not: null } }],

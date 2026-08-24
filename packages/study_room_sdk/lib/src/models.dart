@@ -3,9 +3,11 @@ import 'dart:collection';
 import 'errors.dart';
 import 'generated_contract.dart' as wire;
 
+/// Supplies access tokens on demand, including forced refresh requests.
 typedef StudyRoomTokenProvider =
     Future<StudyRoomAccessToken> Function(StudyRoomTokenRequest request);
 
+/// Describes the minimum validity and refresh behavior for a token request.
 class StudyRoomTokenRequest {
   const StudyRoomTokenRequest({
     this.minimumValidity = Duration.zero,
@@ -16,20 +18,26 @@ class StudyRoomTokenRequest {
   final bool forceRefresh;
 }
 
+/// Bearer token and its absolute expiry time.
 class StudyRoomAccessToken {
   const StudyRoomAccessToken({required this.token, required this.expiresAt});
   final String token;
   final DateTime expiresAt;
 }
 
+/// Realtime presence shown for a room member.
 enum PresenceStatus { online, focusing, idle, away, offline }
 
+/// Membership role inside a room.
 enum RoomRole { owner, member }
 
+/// Lifecycle state of a room access request.
 enum JoinRequestStatus { pending, approved, rejected, cancelled }
 
+/// Persisted and local-only study-session states.
 enum StudySessionStatus { idle, running, paused, finished }
 
+/// Observable SDK connection and synchronization lifecycle states.
 enum StudyRoomConnectionState {
   stopped,
   connecting,
@@ -80,6 +88,7 @@ DateTime _date(Object? value, String field) {
   );
 }
 
+/// Member entry included in a [StudyRoom] snapshot.
 class StudyMember {
   const StudyMember({
     required this.id,
@@ -115,6 +124,7 @@ class StudyMember {
   };
 }
 
+/// Current structural and membership representation of a room.
 class StudyRoom {
   StudyRoom({
     required this.id,
@@ -140,6 +150,7 @@ class StudyRoom {
       members = List.unmodifiable(value.members.map(StudyMember._fromWire));
 }
 
+/// Applicant-facing or owner-facing room access request.
 class RoomJoinRequest {
   const RoomJoinRequest({
     required this.id,
@@ -179,6 +190,7 @@ class RoomJoinRequest {
       );
 }
 
+/// Immutable chat message returned by REST or realtime events.
 class ChatMessage {
   const ChatMessage({
     required this.id,
@@ -214,6 +226,7 @@ class ChatMessage {
   );
 }
 
+/// Current state of one user's study session.
 class StudySessionState {
   const StudySessionState({
     required this.id,
@@ -264,6 +277,7 @@ class StudySessionState {
       );
 }
 
+/// Cursor-based page returned by list operations.
 class StudyRoomPage<T> {
   StudyRoomPage({required List<T> items, required this.nextCursor})
     : items = List.unmodifiable(items);
@@ -323,6 +337,7 @@ class StudyRoomPage<T> {
   }
 }
 
+/// Immutable synchronized SDK cache across joined rooms and personal data.
 class StudyRoomSyncState {
   StudyRoomSyncState({
     Map<String, StudyRoom> rooms = const {},
@@ -359,6 +374,7 @@ class StudyRoomSyncState {
       );
 }
 
+/// Versioned realtime event envelope emitted by the service.
 class StudyRoomRealtimeEvent {
   const StudyRoomRealtimeEvent({
     required this.schemaVersion,

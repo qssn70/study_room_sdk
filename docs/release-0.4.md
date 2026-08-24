@@ -2,6 +2,20 @@
 
 No CI job publishes packages or server images. Promotion is manual after the relevant CI, Compose integration, and platform-build workflows are green.
 
+## `0.4.1`
+
+Backward-compatible quality release: scoped local mutation serialization,
+versioned plaintext backup/import, idempotent room/message/session creates,
+real Dart and Chrome E2E coverage, internal SDK/UI decomposition, grouped
+dependency updates, and automated candidate artifacts.
+
+Pushing a matching `v0.4.*` tag validates every package and contract version,
+runs CI, full Compose integration, Golden tests, and all six unsigned example
+smoke builds. A successful run creates a draft GitHub Release containing only
+the server OCI archive, SPDX JSON SBOM, SHA-256 checksums, and version manifest.
+Example builds remain Actions artifacts. pub.dev publication, image push,
+draft promotion, and production deployment require maintainer approval.
+
 ## `0.4.0-alpha.1`
 
 Contract freeze candidate: OpenAPI/event generation, Prisma migration, application/admin JWKS, tenant auth, strict validation, and core service unit coverage.

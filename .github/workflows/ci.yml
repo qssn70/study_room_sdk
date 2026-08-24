@@ -1,6 +1,12 @@
 name: CI
 
 on:
+  workflow_call:
+    inputs:
+      update_goldens:
+        required: false
+        default: false
+        type: boolean
   push:
     branches: [main]
   pull_request:
@@ -44,6 +50,8 @@ jobs:
         run: npm run generate:contracts
       - name: Validate OpenAPI and generated artifacts
         run: npm run check:contracts
+      - name: Validate local Markdown links
+        run: npm run check:docs:links
       - name: Verify generated artifacts have no diff
         shell: bash
         run: |
@@ -80,6 +88,8 @@ jobs:
           flutter-version: '3.44.1'
           cache: true
       - run: flutter pub get
+      - name: Verify Dart formatting
+        run: dart format --output=none --set-exit-if-changed packages apps
       - name: Regenerate Flutter localization artifacts
         shell: bash
         run: |
@@ -102,9 +112,14 @@ jobs:
           fi
       - name: Analyze SDK, UI, and example
         run: |
-          dart analyze packages/study_room_sdk
-          flutter analyze packages/study_room_ui
-          flutter analyze apps/example_flutter
+          dart analyze --fatal-infos packages/study_room_sdk
+          flutter analyze --fatal-infos packages/study_room_ui
+          flutter analyze --fatal-infos packages/study_room_ui/example
+          flutter analyze --fatal-infos apps/example_flutter
+      - name: Validate exported API documentation links
+        run: |
+          (cd packages/study_room_sdk && dart doc --validate-links)
+          (cd packages/study_room_ui && dart doc --validate-links)
       - name: Test SDK with line and branch coverage
         working-directory: packages/study_room_sdk
         run: dart test --coverage-path=coverage/lcov.info --branch-coverage

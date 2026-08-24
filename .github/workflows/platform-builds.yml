@@ -1,6 +1,7 @@
-name: Flutter platform builds
+name: Example smoke builds
 
 on:
+  workflow_call:
   push:
     branches: [main]
   pull_request:
@@ -10,12 +11,12 @@ permissions:
   contents: read
 
 concurrency:
-  group: flutter-platform-builds-${{ github.ref }}
+  group: example-smoke-builds-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   build:
-    name: Release build (${{ matrix.target }})
+    name: Example smoke build (${{ matrix.target }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     strategy:
@@ -61,26 +62,26 @@ jobs:
         if: matrix.target == 'linux'
         run: sudo apt-get update && sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev
       - run: flutter pub get
-      - name: Record release build start time
+      - name: Record example smoke build start time
         shell: pwsh
         run: |
           $startedAt = [DateTimeOffset]::UtcNow.ToString('o')
           "BUILD_STARTED_AT=$startedAt" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-      - name: Build ${{ matrix.target }} release artifact
+      - name: Build ${{ matrix.target }} example smoke artifact
         working-directory: apps/example_flutter
         run: ${{ matrix.command }}
-      - name: Package ${{ matrix.target }} release artifact
+      - name: Package ${{ matrix.target }} example smoke artifact
         shell: pwsh
         run: |
           $workspace = [IO.Path]::GetFullPath($env:GITHUB_WORKSPACE)
           $sourcePath = [IO.Path]::GetFullPath((Join-Path $workspace '${{ matrix.artifact_path }}'))
           if (-not (Test-Path -LiteralPath $sourcePath)) {
-            throw "Release artifact was not found: $sourcePath"
+            throw "Example smoke artifact was not found: $sourcePath"
           }
 
-          $releaseDirectory = Join-Path $workspace 'artifacts/releases'
+          $releaseDirectory = Join-Path $workspace 'artifacts/example-smoke'
           New-Item -ItemType Directory -Path $releaseDirectory -Force | Out-Null
-          $baseName = "study-room-${{ matrix.target }}-${{ github.sha }}"
+          $baseName = "study-room-example-smoke-${{ matrix.target }}-${{ github.sha }}"
           switch ('${{ matrix.target }}') {
             'android' {
               $packagedPath = Join-Path $releaseDirectory "$baseName.apk"
@@ -107,7 +108,7 @@ jobs:
             }
           }
           if (-not (Test-Path -LiteralPath $packagedPath -PathType Leaf)) {
-            throw "Packaged release artifact was not created: $packagedPath"
+            throw "Packaged example smoke artifact was not created: $packagedPath"
           }
           $relativePackagedPath = [IO.Path]::GetRelativePath($workspace, $packagedPath).Replace('\', '/')
           $artifactRelativePath = [IO.Path]::GetRelativePath(
@@ -116,7 +117,7 @@ jobs:
           ).Replace('\', '/')
           "PACKAGED_ARTIFACT_PATH=$relativePackagedPath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           "ARTIFACT_RELATIVE_PATH=$artifactRelativePath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-      - name: Generate release evidence manifest
+      - name: Generate example smoke evidence manifest
         shell: pwsh
         run: |
           $workspace = [IO.Path]::GetFullPath($env:GITHUB_WORKSPACE)
@@ -128,10 +129,10 @@ jobs:
           } elseif (Test-Path -LiteralPath $artifactPath -PathType Container) {
             $files = @(Get-ChildItem -LiteralPath $artifactPath -File -Recurse)
           } else {
-            throw "Release artifact was not found: $workspaceRelativePath"
+            throw "Example smoke artifact was not found: $workspaceRelativePath"
           }
           if ($files.Count -eq 0) {
-            throw "Release artifact contains no files: $workspaceRelativePath"
+            throw "Example smoke artifact contains no files: $workspaceRelativePath"
           }
 
           $entries = @(
@@ -171,12 +172,12 @@ jobs:
           $manifestPath = Join-Path $manifestDirectory '${{ matrix.target }}.json'
           $manifest | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $manifestPath -Encoding utf8
           Get-Content -LiteralPath $manifestPath
-      - name: Upload ${{ matrix.target }} release artifact
+      - name: Upload ${{ matrix.target }} example smoke artifact
         uses: actions/upload-artifact@v4
         with:
-          name: study-room-${{ matrix.target }}-${{ github.sha }}
+          name: study-room-example-smoke-${{ matrix.target }}-${{ github.sha }}
           path: |
-            artifacts/releases/**
+            artifacts/example-smoke/**
             artifacts/manifests/${{ matrix.target }}.json
           overwrite: true
           if-no-files-found: error

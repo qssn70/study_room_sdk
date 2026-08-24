@@ -1195,6 +1195,133 @@ void main() {
     });
   });
 
+  test(
+    'focus mutations are serialized across scoped store instances',
+    () async {
+      SharedPreferences.setMockInitialValues({});
+      final preferences = await SharedPreferences.getInstance();
+      final scope = StudyStorageScope.user(
+        userId: 'user-1',
+        namespace: 'concurrent-focus',
+      );
+      final first = SharedPreferencesStudyStore(preferences, scope: scope);
+      final second = SharedPreferencesStudyStore(preferences, scope: scope);
+      final date = DateTime(2026, 6, 19);
+
+      await Future.wait([
+        first.addFocusSession(date, const Duration(minutes: 25)),
+        second.addFocusSession(date, const Duration(minutes: 50), pomodoros: 2),
+      ]);
+
+      final record = await first.loadDayRecord(date);
+      expect(record.focusDuration, const Duration(minutes: 75));
+      expect(record.pomodoroCount, 3);
+    },
+  );
+
+  test('failed focus mutations do not poison the scoped queue', () async {
+    final preferences = _FailingMigrationPreferences({});
+    final store = SharedPreferencesStudyStore(
+      preferences,
+      scope: StudyStorageScope.user(userId: 'user-1', namespace: 'focus-retry'),
+    );
+    final date = DateTime(2026, 6, 19);
+
+    await expectLater(
+      store.addFocusSession(date, const Duration(minutes: 25)),
+      throwsStateError,
+    );
+    await store.addFocusSession(date, const Duration(minutes: 50));
+
+    expect(
+      (await store.loadDayRecord(date)).focusDuration,
+      const Duration(minutes: 50),
+    );
+  });
+
+  test('SharedPreferences backup merge and replace stay scope-local', () async {
+    SharedPreferences.setMockInitialValues({});
+    final preferences = await SharedPreferences.getInstance();
+    final source = SharedPreferencesStudyStore(
+      preferences,
+      scope: StudyStorageScope.user(userId: 'source', namespace: 'backup'),
+    );
+    final target = SharedPreferencesStudyStore(
+      preferences,
+      scope: StudyStorageScope.user(userId: 'target', namespace: 'backup'),
+    );
+    final date = DateTime(2026, 6, 19);
+    await source.saveTodayGoal(date, const TodayGoal(text: 'Imported'));
+    await source.addFocusSession(date, const Duration(minutes: 25));
+    await source.saveTaskRecord(
+      date,
+      const StudyTaskRecord(id: 'one', title: 'One', completed: true),
+    );
+    await source.saveSettings(StudyFocusSettings(desktopSection: 'history'));
+    await target.saveTodayGoal(
+      DateTime(2026, 6, 18),
+      const TodayGoal(text: 'Keep me'),
+    );
+    await target.saveTaskRecord(
+      date,
+      const StudyTaskRecord(id: 'one', title: 'Old title', completed: false),
+    );
+    await target.saveTaskRecord(
+      date,
+      const StudyTaskRecord(
+        id: 'local-only',
+        title: 'Keep local task',
+        completed: false,
+      ),
+    );
+
+    final backup = StudyDataBackup.fromJson(
+      Map<String, dynamic>.from(
+        jsonDecode(jsonEncode((await source.exportBackup()).toJson())) as Map,
+      ),
+    );
+    await target.importBackup(backup);
+    expect((await target.loadTodayGoal(date)).text, 'Imported');
+    expect((await target.loadTodayGoal(DateTime(2026, 6, 18))).text, 'Keep me');
+    final mergedTasks = await target.loadTaskRecords(date);
+    expect(mergedTasks.map((task) => task.id), ['one', 'local-only']);
+    expect(mergedTasks.first.title, 'One');
+    expect(mergedTasks.first.completed, isTrue);
+    expect(mergedTasks.last.title, 'Keep local task');
+
+    await target.importBackup(backup, mode: StudyBackupImportMode.replace);
+    expect((await target.loadTodayGoal(DateTime(2026, 6, 18))).text, isEmpty);
+    expect((await target.loadTaskRecords(date)).map((task) => task.id), [
+      'one',
+    ]);
+    expect((await source.loadTodayGoal(date)).text, 'Imported');
+  });
+
+  test('SharedPreferences backup import rolls back failed writes', () async {
+    final date = DateTime(2026, 6, 19);
+    final scope = StudyStorageScope.user(
+      userId: 'user-1',
+      namespace: 'rollback',
+    );
+    final goalKey = '${scope.storagePrefix}:goal:2026-06-19';
+    final preferences = _FailingMigrationPreferences({
+      goalKey: jsonEncode(const TodayGoal(text: 'Original').toJson()),
+    });
+    final store = SharedPreferencesStudyStore(preferences, scope: scope);
+    final backup = StudyDataBackup(
+      exportedAt: DateTime.utc(2026, 6, 19),
+      goalsByDate: const {'2026-06-19': TodayGoal(text: 'Replacement')},
+    );
+    final changes = <StudyStoreChange>[];
+    final subscription = store.changes.listen(changes.add);
+
+    await expectLater(store.importBackup(backup), throwsStateError);
+
+    expect((await store.loadTodayGoal(date)).text, 'Original');
+    expect(changes, isEmpty);
+    await subscription.cancel();
+  });
+
   test('settings stay isolated by identity and namespace', () async {
     SharedPreferences.setMockInitialValues({});
     final preferences = await SharedPreferences.getInstance();

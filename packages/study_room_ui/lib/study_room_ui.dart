@@ -1,5 +1,3 @@
-library study_room_ui;
-
 export 'src/analytics.dart';
 export 'src/audio.dart';
 export 'src/backgrounds.dart';

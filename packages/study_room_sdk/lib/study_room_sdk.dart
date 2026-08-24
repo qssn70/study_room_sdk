@@ -1,5 +1,3 @@
-library study_room_sdk;
-
 export 'src/errors.dart';
 export 'src/focus.dart';
 export 'src/generated_contract.dart';

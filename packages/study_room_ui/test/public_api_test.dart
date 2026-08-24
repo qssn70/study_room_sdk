@@ -24,10 +24,16 @@ void main() {
   );
 
   test('documented builder typedefs remain source-compatible', () {
-    final StudyFocusDesktopPageBuilder pageBuilder =
-        (context, section, defaultPage) => defaultPage;
-    final StudyTaskEditor taskEditor = (context, date, existing) async =>
-        existing;
+    Widget pageBuilder(
+      BuildContext context,
+      StudyFocusDesktopSection section,
+      Widget defaultPage,
+    ) => defaultPage;
+    Future<StudyTaskRecord?> taskEditor(
+      BuildContext context,
+      DateTime date,
+      StudyTaskRecord? existing,
+    ) async => existing;
     const task = StudyTaskRecord(id: 'task-1', title: 'Read', completed: false);
 
     expect(pageBuilder, isA<StudyFocusDesktopPageBuilder>());

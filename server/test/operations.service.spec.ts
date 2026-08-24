@@ -15,12 +15,16 @@ describe('RetentionService advisory-lock cleanup', () => {
       }]) },
       chatMessage: { deleteMany: jest.fn(async () => ({ count: 2 })) },
       studySession: { deleteMany: jest.fn(async () => ({ count: 1 })) },
+      idempotencyRecord: { deleteMany: jest.fn(async () => ({ count: 3 })) },
     };
     const prisma = { $transaction: jest.fn(async (callback) => callback(tx)) };
     const service = new RetentionService(prisma as never);
     await service.clean();
     expect(tx.chatMessage.deleteMany).toHaveBeenCalledTimes(1);
     expect(tx.studySession.deleteMany).toHaveBeenCalledTimes(1);
+    expect(tx.idempotencyRecord.deleteMany).toHaveBeenCalledWith({
+      where: { createdAt: { lt: new Date(now - 86_400_000) } },
+    });
     expect(tx.chatMessage.deleteMany).toHaveBeenCalledWith({
       where: {
         appId: 'app-1',
@@ -46,9 +50,11 @@ describe('RetentionService advisory-lock cleanup', () => {
     const tx = {
       $queryRaw: jest.fn(async () => [{ locked: false }]),
       application: { findMany: jest.fn() },
+      idempotencyRecord: { deleteMany: jest.fn() },
     };
     const prisma = { $transaction: jest.fn(async (callback) => callback(tx)) };
     await new RetentionService(prisma as never).clean();
     expect(tx.application.findMany).not.toHaveBeenCalled();
+    expect(tx.idempotencyRecord.deleteMany).not.toHaveBeenCalled();
   });
 });

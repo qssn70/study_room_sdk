@@ -1,9 +1,12 @@
 name: Compose integration
 
 on:
+  workflow_call:
   pull_request:
   push:
     branches: [main]
+  schedule:
+    - cron: '17 18 * * *'
   workflow_dispatch:
 
 permissions:
@@ -14,7 +17,314 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  build_test_image:
+    name: Build immutable server test image
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      STUDY_ROOM_SERVER_IMAGE: study-room-server:test-${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build server test image once
+        run: docker build --tag "$STUDY_ROOM_SERVER_IMAGE" --file server/Dockerfile .
+      - name: Export compressed image and identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          docker image inspect "$STUDY_ROOM_SERVER_IMAGE" --format '{{.Id}}' \
+            > artifacts/server-image-id.txt
+          docker save "$STUDY_ROOM_SERVER_IMAGE" | gzip -1 \
+            > artifacts/server-image.tar.gz
+          sha256sum artifacts/server-image.tar.gz > artifacts/server-image.tar.gz.sha256
+      - name: Upload immutable server test image
+        uses: actions/upload-artifact@v4
+        with:
+          name: server-test-image-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 3
+
+  sdk_core:
+    name: Real Dart SDK core E2E
+    needs: build_test_image
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      COMPOSE_PROJECT_NAME: study-room-sdk-${{ github.run_id }}-${{ github.run_attempt }}
+      POSTGRES_PASSWORD: sdk-${{ github.run_id }}-${{ github.run_attempt }}
+      NODE_ENV: test
+      STUDY_ROOM_RUNTIME_PROFILE: test
+      STUDY_ROOM_ALLOW_INSECURE_JWKS: "true"
+      STUDY_ROOM_ADMIN_JWKS_URL: http://jwks:4000/admin/jwks.json
+      STUDY_ROOM_ADMIN_JWT_ISSUER: http://jwks:4000/admin
+      STUDY_ROOM_ADMIN_JWT_AUDIENCE: study-room-admin
+      STUDY_ROOM_SERVER_IMAGE: study-room-server:test-${{ github.sha }}
+      E2E_FIXTURE_CONTROL_TOKEN: sdk-fixture-${{ github.run_id }}-${{ github.run_attempt }}
+      SDK_E2E_RUN_ID: sdk-${{ github.run_id }}-${{ github.run_attempt }}
+      SDK_E2E_API: http://127.0.0.1:3000
+      SDK_E2E_JWKS: http://127.0.0.1:4000
+      SDK_E2E_RESULT_PATH: ${{ github.workspace }}/artifacts/sdk-e2e.json
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.44.1'
+          cache: true
+      - uses: actions/download-artifact@v4
+        with:
+          name: server-test-image-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .ci-image
+      - name: Load immutable server test image
+        run: |
+          gunzip -c .ci-image/server-image.tar.gz | docker load
+          test "$(docker image inspect "$STUDY_ROOM_SERVER_IMAGE" --format '{{.Id}}')" = \
+            "$(cat .ci-image/server-image-id.txt)"
+      - name: Initialize evidence and Dart dependencies
+        run: |
+          mkdir -p artifacts
+          cp .ci-image/server-image-id.txt artifacts/server-image-id.txt
+          flutter pub get
+      - name: Start SDK E2E stack
+        id: start
+        run: |
+          docker compose --profile test up --detach --wait postgres redis jwks
+          docker compose --profile test run --rm migrate
+          docker compose --profile test run --rm --no-deps seed
+          docker compose --profile test up --detach --wait proxy
+      - name: Run real Dart SDK two-user and idempotency flow
+        id: sdk
+        working-directory: packages/study_room_sdk
+        shell: bash
+        run: dart run tool/real_sdk_e2e.dart > ../../artifacts/dart-sdk.log 2>&1
+      - name: Capture SDK E2E diagnostics
+        if: always()
+        shell: bash
+        run: |
+          docker compose ps --all --format json > artifacts/compose-ps.json 2>&1 || true
+          docker compose logs --no-color --timestamps > artifacts/compose.log 2>&1 || true
+          jq -n \
+            --arg start '${{ steps.start.outcome }}' \
+            --arg sdk '${{ steps.sdk.outcome }}' \
+            '{schemaVersion:1,scenario:"real-dart-sdk-core",steps:{start:$start,sdk:$sdk}}' \
+            > artifacts/result.json
+      - name: Upload real SDK evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: real-dart-sdk-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts
+          if-no-files-found: error
+          retention-days: 14
+      - name: Remove SDK E2E stack
+        if: always()
+        run: docker compose --profile test down --volumes --remove-orphans --timeout 10
+
+  sdk_browser:
+    name: Real Chrome SDK CORS and Socket.IO E2E
+    needs: build_test_image
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      COMPOSE_PROJECT_NAME: study-room-browser-${{ github.run_id }}-${{ github.run_attempt }}
+      POSTGRES_PASSWORD: browser-${{ github.run_id }}-${{ github.run_attempt }}
+      NODE_ENV: test
+      STUDY_ROOM_RUNTIME_PROFILE: test
+      STUDY_ROOM_ALLOW_INSECURE_JWKS: "true"
+      STUDY_ROOM_ALLOWED_ORIGINS: http://127.0.0.1:4173
+      STUDY_ROOM_ADMIN_JWKS_URL: http://jwks:4000/admin/jwks.json
+      STUDY_ROOM_ADMIN_JWT_ISSUER: http://jwks:4000/admin
+      STUDY_ROOM_ADMIN_JWT_AUDIENCE: study-room-admin
+      STUDY_ROOM_SERVER_IMAGE: study-room-server:test-${{ github.sha }}
+      E2E_FIXTURE_CONTROL_TOKEN: browser-fixture-${{ github.run_id }}-${{ github.run_attempt }}
+      E2E_BROWSER_ROOT: ${{ github.workspace }}/artifacts/browser
+      E2E_BROWSER_RESULT_PATH: ${{ github.workspace }}/artifacts/browser-sdk.json
+      E2E_BROWSER_LOG_PATH: ${{ github.workspace }}/artifacts/browser-console.json
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.44.1'
+          cache: true
+      - uses: actions/download-artifact@v4
+        with:
+          name: server-test-image-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .ci-image
+      - name: Load immutable server test image
+        run: gunzip -c .ci-image/server-image.tar.gz | docker load
+      - name: Compile the real Dart SDK browser program
+        working-directory: packages/study_room_sdk
+        shell: bash
+        run: |
+          set -euo pipefail
+          flutter pub get
+          mkdir -p "$GITHUB_WORKSPACE/artifacts/browser"
+          cp tool/browser_e2e/index.html "$GITHUB_WORKSPACE/artifacts/browser/index.html"
+          dart compile js -O2 tool/browser_sdk_e2e.dart \
+            -o "$GITHUB_WORKSPACE/artifacts/browser/main.js"
+          cp "$GITHUB_WORKSPACE/.ci-image/server-image-id.txt" \
+            "$GITHUB_WORKSPACE/artifacts/server-image-id.txt"
+      - name: Start browser E2E stack
+        id: start
+        run: |
+          docker compose --profile test up --detach --wait postgres redis jwks
+          docker compose --profile test run --rm migrate
+          docker compose --profile test run --rm --no-deps seed
+          docker compose --profile test up --detach --wait proxy
+      - name: Run the SDK in headless Chrome
+        id: browser
+        shell: bash
+        run: |
+          set -o pipefail
+          node server/tool/e2e-browser-chrome.mjs \
+            > artifacts/browser-driver.log 2>&1
+          jq -e '.success == true and all(.assertions[]; . == true)' \
+            artifacts/browser-sdk.json > /dev/null
+      - name: Capture browser E2E diagnostics
+        if: always()
+        shell: bash
+        run: |
+          docker compose ps --all --format json > artifacts/compose-ps.json 2>&1 || true
+          docker compose logs --no-color --timestamps > artifacts/compose.log 2>&1 || true
+          jq -n \
+            --arg start '${{ steps.start.outcome }}' \
+            --arg browser '${{ steps.browser.outcome }}' \
+            '{schemaVersion:1,scenario:"real-chrome-sdk-cors-socketio",steps:{start:$start,browser:$browser}}' \
+            > artifacts/result.json
+      - name: Upload Chrome SDK evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: real-chrome-sdk-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts
+          if-no-files-found: error
+          retention-days: 14
+      - name: Remove browser E2E stack
+        if: always()
+        run: docker compose --profile test down --volumes --remove-orphans --timeout 10
+
+  sdk_resilience:
+    name: Real Dart SDK token and failover E2E
+    needs: build_test_image
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      COMPOSE_PROJECT_NAME: study-room-sdk-resilience-${{ github.run_id }}-${{ github.run_attempt }}
+      POSTGRES_PASSWORD: sdk-resilience-${{ github.run_id }}-${{ github.run_attempt }}
+      NODE_ENV: test
+      STUDY_ROOM_RUNTIME_PROFILE: test
+      STUDY_ROOM_ALLOW_INSECURE_JWKS: "true"
+      STUDY_ROOM_ADMIN_JWKS_URL: http://jwks:4000/admin/jwks.json
+      STUDY_ROOM_ADMIN_JWT_ISSUER: http://jwks:4000/admin
+      STUDY_ROOM_ADMIN_JWT_AUDIENCE: study-room-admin
+      STUDY_ROOM_JWKS_CACHE_MS: 1000
+      STUDY_ROOM_SERVER_IMAGE: study-room-server:test-${{ github.sha }}
+      E2E_ALLOW_SHORT_LIVED_TOKENS: "true"
+      E2E_FIXTURE_CONTROL_TOKEN: sdk-resilience-fixture-${{ github.run_id }}-${{ github.run_attempt }}
+      SDK_E2E_RUN_ID: sdk-resilience-${{ github.run_id }}-${{ github.run_attempt }}
+      SDK_E2E_API: http://127.0.0.1:3000
+      SDK_E2E_JWKS: http://127.0.0.1:4000
+      SDK_E2E_RESULT_PATH: ${{ github.workspace }}/artifacts/sdk-resilience.json
+      SDK_E2E_READY_PATH: ${{ github.workspace }}/artifacts/sdk-resilience.ready
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.44.1'
+          cache: true
+      - uses: actions/download-artifact@v4
+        with:
+          name: server-test-image-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .ci-image
+      - name: Load immutable server test image
+        run: gunzip -c .ci-image/server-image.tar.gz | docker load
+      - name: Initialize SDK resilience evidence
+        run: |
+          mkdir -p artifacts
+          cp .ci-image/server-image-id.txt artifacts/server-image-id.txt
+          flutter pub get
+      - name: Start stack pinned to api-1
+        id: start
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp deploy/nginx-upstream.conf artifacts/nginx-upstream.conf.original
+          awk \
+            '$0 ~ "server api-2:3000" { sub(/;$/, " down;") } { print }' \
+            artifacts/nginx-upstream.conf.original > deploy/nginx-upstream.conf
+          docker compose --profile test up --detach --wait postgres redis jwks
+          docker compose --profile test run --rm migrate
+          docker compose --profile test run --rm --no-deps seed
+          docker compose --profile test up --detach --wait proxy
+      - name: Verify token refresh, JWKS retirement, reconnect, and resync
+        id: sdk
+        shell: bash
+        run: |
+          set -euo pipefail
+          restore_upstream() {
+            cp artifacts/nginx-upstream.conf.original deploy/nginx-upstream.conf
+            docker compose exec -T proxy nginx -t > /dev/null 2>&1 \
+              && docker compose exec -T proxy nginx -s reload > /dev/null 2>&1 || true
+          }
+          cleanup_sdk() {
+            if [[ -n "${sdk_pid:-}" ]] && kill -0 "$sdk_pid" 2>/dev/null; then
+              kill "$sdk_pid" || true
+              wait "$sdk_pid" 2>/dev/null || true
+            fi
+            restore_upstream
+          }
+          trap cleanup_sdk EXIT
+          (cd packages/study_room_sdk && \
+            dart run tool/real_sdk_resilience_e2e.dart) \
+            > artifacts/dart-sdk-resilience.log 2>&1 &
+          sdk_pid=$!
+          for _ in $(seq 1 60); do
+            [[ -f artifacts/sdk-resilience.ready ]] && break
+            kill -0 "$sdk_pid" 2>/dev/null || break
+            sleep 0.5
+          done
+          [[ -f artifacts/sdk-resilience.ready ]]
+          awk \
+            '$0 ~ "server api-1:3000" { sub(/;$/, " down;") } { print }' \
+            artifacts/nginx-upstream.conf.original > deploy/nginx-upstream.conf
+          docker compose exec -T proxy nginx -t
+          docker compose exec -T proxy nginx -s reload
+          docker compose stop --timeout 15 api-1
+          wait "$sdk_pid"
+          sdk_pid=''
+          jq -e '.success == true and all(.assertions[]; . == true)' \
+            artifacts/sdk-resilience.json > /dev/null
+          restore_upstream
+          trap - EXIT
+      - name: Capture SDK resilience diagnostics
+        if: always()
+        shell: bash
+        run: |
+          docker compose ps --all --format json > artifacts/compose-ps.json 2>&1 || true
+          docker compose logs --no-color --timestamps > artifacts/compose.log 2>&1 || true
+          jq -n \
+            --arg start '${{ steps.start.outcome }}' \
+            --arg sdk '${{ steps.sdk.outcome }}' \
+            '{schemaVersion:1,scenario:"real-dart-sdk-resilience",steps:{start:$start,sdk:$sdk}}' \
+            > artifacts/result.json
+      - name: Upload SDK resilience evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: real-dart-sdk-resilience-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts
+          if-no-files-found: error
+          retention-days: 14
+      - name: Remove SDK resilience stack
+        if: always()
+        run: docker compose --profile test down --volumes --remove-orphans --timeout 10
+
   rate_limit:
+    needs: build_test_image
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 25
     env:
@@ -28,8 +338,15 @@ jobs:
       STUDY_ROOM_ADMIN_JWT_AUDIENCE: study-room-admin
       E2E_FIXTURE_CONTROL_TOKEN: rate-fixture-${{ github.run_id }}-${{ github.run_attempt }}
       E2E_RUN_ID: rate-${{ github.run_id }}-${{ github.run_attempt }}
+      STUDY_ROOM_SERVER_IMAGE: study-room-server:test-${{ github.sha }}
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: server-test-image-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .ci-image
+      - name: Load immutable server test image
+        run: gunzip -c .ci-image/server-image.tar.gz | docker load
       - name: Initialize evidence timing
         run: |
           mkdir -p artifacts
@@ -38,10 +355,10 @@ jobs:
       - name: Start isolated rate-limit stack
         id: start
         run: |
-          docker compose --profile test up --build --detach --wait postgres redis jwks
+          docker compose --profile test up --detach --wait postgres redis jwks
           docker compose --profile test run --rm migrate
           docker compose --profile test run --rm --no-deps seed
-          docker compose --profile test up --build --detach --wait proxy
+          docker compose --profile test up --detach --wait proxy
 
       - name: Verify one shared IP quota across both API instances
         id: probe
@@ -88,6 +405,8 @@ jobs:
         run: docker compose --profile test down --volumes --remove-orphans --timeout 10
 
   core:
+    needs: build_test_image
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 40
     env:
@@ -104,8 +423,15 @@ jobs:
       E2E_RUN_ID: core-${{ github.run_id }}-${{ github.run_attempt }}
       STUDY_ROOM_JWKS_CACHE_MS: 1000
       E2E_JWKS_RETIRE_WAIT_MS: 2500
+      STUDY_ROOM_SERVER_IMAGE: study-room-server:test-${{ github.sha }}
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: server-test-image-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .ci-image
+      - name: Load immutable server test image
+        run: gunzip -c .ci-image/server-image.tar.gz | docker load
       - name: Initialize evidence timing
         run: |
           mkdir -p artifacts
@@ -114,10 +440,10 @@ jobs:
       - name: Start isolated two-instance stack
         id: start
         run: |
-          docker compose --profile test up --build --detach --wait postgres redis jwks
+          docker compose --profile test up --detach --wait postgres redis jwks
           docker compose --profile test run --rm migrate
           docker compose --profile test run --rm --no-deps seed
-          docker compose --profile test up --build --detach --wait proxy
+          docker compose --profile test up --detach --wait proxy
 
       - name: Verify migration replay is idempotent
         id: migration
@@ -213,6 +539,8 @@ jobs:
         run: docker compose --profile test down --volumes --remove-orphans --timeout 10
 
   resilience:
+    needs: build_test_image
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
@@ -235,8 +563,15 @@ jobs:
       OTEL_BSP_SCHEDULE_DELAY: 60000
       OTEL_BSP_MAX_EXPORT_BATCH_SIZE: 8192
       OTEL_BSP_MAX_QUEUE_SIZE: 16384
+      STUDY_ROOM_SERVER_IMAGE: study-room-server:test-${{ github.sha }}
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: server-test-image-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .ci-image
+      - name: Load immutable server test image
+        run: gunzip -c .ci-image/server-image.tar.gz | docker load
       - name: Initialize evidence timing
         run: |
           mkdir -p artifacts
@@ -246,10 +581,10 @@ jobs:
         id: start
         run: |
           cp deploy/nginx-upstream.conf artifacts/nginx-upstream.conf.original
-          docker compose --profile test up --build --detach --wait postgres redis jwks otel
+          docker compose --profile test up --detach --wait postgres redis jwks otel
           docker compose --profile test run --rm migrate
           docker compose --profile test run --rm --no-deps seed
-          docker compose --profile test up --build --detach --wait proxy
+          docker compose --profile test up --detach --wait proxy
 
       - name: Verify dependency readiness failure and recovery
         id: dependencies
@@ -683,6 +1018,8 @@ jobs:
         run: docker compose --profile test down --volumes --remove-orphans --timeout 10
 
   restore:
+    needs: build_test_image
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call'
     runs-on: ubuntu-latest
     timeout-minutes: 40
     env:
@@ -696,8 +1033,15 @@ jobs:
       STUDY_ROOM_ADMIN_JWT_AUDIENCE: study-room-admin
       E2E_FIXTURE_CONTROL_TOKEN: restore-fixture-${{ github.run_id }}-${{ github.run_attempt }}
       E2E_RUN_ID: restore-${{ github.run_id }}-${{ github.run_attempt }}
+      STUDY_ROOM_SERVER_IMAGE: study-room-server:test-${{ github.sha }}
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: server-test-image-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .ci-image
+      - name: Load immutable server test image
+        run: gunzip -c .ci-image/server-image.tar.gz | docker load
       - name: Initialize evidence timing
         run: |
           mkdir -p artifacts
@@ -706,10 +1050,10 @@ jobs:
       - name: Start isolated restore stack
         id: start
         run: |
-          docker compose --profile test up --build --detach --wait postgres redis jwks
+          docker compose --profile test up --detach --wait postgres redis jwks
           docker compose --profile test run --rm migrate
           docker compose --profile test run --rm --no-deps seed
-          docker compose --profile test up --build --detach --wait proxy
+          docker compose --profile test up --detach --wait proxy
 
       - name: Create data for logical backup
         id: setup
@@ -788,6 +1132,8 @@ jobs:
         run: docker compose --profile test down --volumes --remove-orphans --timeout 10
 
   soak:
+    needs: build_test_image
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
@@ -803,8 +1149,15 @@ jobs:
       E2E_RUN_ID: soak-${{ github.run_id }}-${{ github.run_attempt }}
       STUDY_ROOM_PRESENCE_TTL_SECONDS: 20
       STUDY_ROOM_PRESENCE_REFRESH_SECONDS: 5
+      STUDY_ROOM_SERVER_IMAGE: study-room-server:test-${{ github.sha }}
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: server-test-image-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .ci-image
+      - name: Load immutable server test image
+        run: gunzip -c .ci-image/server-image.tar.gz | docker load
       - name: Initialize evidence timing
         run: |
           mkdir -p artifacts
@@ -814,10 +1167,10 @@ jobs:
         id: start
         run: |
           cp deploy/nginx-upstream.conf artifacts/nginx-upstream.conf.original
-          docker compose --profile test up --build --detach --wait postgres redis jwks
+          docker compose --profile test up --detach --wait postgres redis jwks
           docker compose --profile test run --rm migrate
           docker compose --profile test run --rm --no-deps seed
-          docker compose --profile test up --build --detach --wait proxy proxy-test
+          docker compose --profile test up --detach --wait proxy proxy-test
 
       - name: Run ten-minute mixed HTTP/WebSocket soak with rolling replacements
         id: workload

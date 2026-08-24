@@ -5,6 +5,10 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { JoinRequestStatus, Prisma, RoomRole } from '@prisma/client';
+import {
+  IdempotencyService,
+  IdempotentResult,
+} from '../common/idempotency.service';
 import { ExternalIdentity, JoinRequestDto, StudyRoomDto } from '../domain';
 import { toRoomWire } from '../generated/contract-types';
 import { PrismaService } from '../prisma/prisma.service';
@@ -19,39 +23,42 @@ type RequestWithUser = Prisma.JoinRequestGetPayload<{ include: { user: true } }>
 
 @Injectable()
 export class RoomsService {
-  constructor(private readonly prisma: PrismaService, private readonly presence: PresenceService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly presence: PresenceService,
+    private readonly idempotency?: IdempotencyService,
+  ) {}
 
   async create(title: string, identity: ExternalIdentity): Promise<StudyRoomDto> {
     const normalized = title.trim();
     const room = await this.prisma.$transaction(async (tx) => {
-      const created = await tx.room.create({
-        data: {
-          appId: identity.appId,
-          title: normalized,
-          memberships: {
-            create: {
-              role: RoomRole.OWNER,
-              user: {
-                connect: {
-                  appId_userId: { appId: identity.appId, userId: identity.userId },
-                },
-              },
-            },
-          },
-        },
-        include: roomInclude,
-      });
-      await tx.auditLog.create({
-        data: {
-          appId: identity.appId,
-          actorId: identity.userId,
-          action: 'room.created',
-          resourceId: created.id,
-        },
-      });
-      return created;
+      return this.createRoom(tx, normalized, identity);
     });
     return this.toRoomDto(room);
+  }
+
+  async createIdempotent(
+    title: string,
+    identity: ExternalIdentity,
+    idempotencyKey?: string,
+  ): Promise<IdempotentResult<StudyRoomDto>> {
+    if (idempotencyKey === undefined) {
+      return { value: await this.create(title, identity), created: true };
+    }
+    if (!this.idempotency) throw new Error('IdempotencyService is unavailable');
+    const normalized = title.trim();
+    return this.idempotency.execute({
+      appId: identity.appId,
+      userId: identity.userId,
+      operation: 'rooms.create',
+      key: idempotencyKey,
+      request: { title: normalized },
+      create: async (tx, resourceId) => {
+        const room = await this.createRoom(tx, normalized, identity, resourceId);
+        return this.toRoomDto(room);
+      },
+      replay: (resourceId) => this.snapshot(identity.appId, resourceId),
+    });
   }
 
   async list(identity: ExternalIdentity, cursor?: string, limit = 50) {
@@ -349,6 +356,44 @@ export class RoomsService {
     });
     if (!room) throw new ForbiddenException('Room membership is required');
     return room;
+  }
+
+  private async createRoom(
+    tx: Prisma.TransactionClient,
+    title: string,
+    identity: ExternalIdentity,
+    id?: string,
+  ): Promise<RoomWithMembers> {
+    const created = await tx.room.create({
+      data: {
+        ...(id === undefined ? {} : { id }),
+        appId: identity.appId,
+        title,
+        memberships: {
+          create: {
+            role: RoomRole.OWNER,
+            user: {
+              connect: {
+                appId_userId: {
+                  appId: identity.appId,
+                  userId: identity.userId,
+                },
+              },
+            },
+          },
+        },
+      },
+      include: roomInclude,
+    });
+    await tx.auditLog.create({
+      data: {
+        appId: identity.appId,
+        actorId: identity.userId,
+        action: 'room.created',
+        resourceId: created.id,
+      },
+    });
+    return created;
   }
 
   private async toRoomDto(room: RoomWithMembers): Promise<StudyRoomDto> {

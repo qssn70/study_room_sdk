@@ -1,3 +1,8 @@
+## 0.4.1
+
+- Added optional idempotency keys for room creation, chat messages, and session starts.
+- Added versioned local study-data backup/import contracts and stronger Store lifecycle documentation.
+
 ## 0.4.0
 
 - Promoted the 0.4 release candidate to the stable release with no additional public API changes.

@@ -100,38 +100,51 @@ void main() {
         ),
       );
       transport.handler = (method, path, body) async {
-        if (path == '/v1/rooms' && method == 'POST') return _roomJson('room-1');
-        if (path.startsWith('/v1/rooms?'))
+        if (path == '/v1/rooms' && method == 'POST') {
+          return _roomJson('room-1');
+        }
+        if (path.startsWith('/v1/rooms?')) {
           return {
             'items': [_roomJson('room-1')],
             'nextCursor': null,
           };
-        if (path.startsWith('/v1/join-requests'))
+        }
+        if (path.startsWith('/v1/join-requests')) {
           return {
             'items': [_requestJson()],
             'nextCursor': null,
           };
-        if (path.endsWith('/join-requests') && method == 'POST')
+        }
+        if (path.endsWith('/join-requests') && method == 'POST') {
           return _requestJson();
+        }
         if (path.contains('/join-requests/') && method == 'PATCH') {
           return {..._requestJson(), 'status': body!['decision']};
         }
         if (path.endsWith('/owner')) return _roomJson('room-1');
         if (path.endsWith('/sessions')) return _sessionJson();
-        if (path.startsWith('/v1/sessions/'))
+        if (path.startsWith('/v1/sessions/')) {
           return {..._sessionJson(), 'status': body!['status']};
+        }
         if (path.contains('/messages') && method == 'GET') {
           return {
             'items': [_messageJson()],
             'nextCursor': 'next',
           };
         }
-        if (path.contains('/messages') && method == 'POST')
+        if (path.contains('/messages') && method == 'POST') {
           return _messageJson(text: body!['text'] as String);
+        }
         return null;
       };
 
-      expect((await sdk.rooms.create(' Focus ')).title, 'Focus Room');
+      expect(
+        (await sdk.rooms.create(
+          ' Focus ',
+          idempotencyKey: 'room:create-1',
+        )).title,
+        'Focus Room',
+      );
       expect((await sdk.rooms.list(limit: 25)).items, hasLength(1));
       expect(
         (await sdk.joinRequests.request('room-1')).status,
@@ -150,7 +163,10 @@ void main() {
         (await sdk.members.transferOwnership('room-1', 'user-2')).version,
         3,
       );
-      final session = await sdk.sessions.start('room-1');
+      final session = await sdk.sessions.start(
+        'room-1',
+        idempotencyKey: 'session:start-1',
+      );
       expect(
         (await sdk.sessions.update(
           session.id,
@@ -159,7 +175,33 @@ void main() {
         StudySessionStatus.paused,
       );
       expect((await sdk.chat.history('room-1')).nextCursor, 'next');
-      expect((await sdk.chat.send('room-1', ' hello ')).text, 'hello');
+      expect(
+        (await sdk.chat.send(
+          'room-1',
+          ' hello ',
+          idempotencyKey: 'message:send-1',
+        )).text,
+        'hello',
+      );
+      expect(
+        transport.requests
+            .where((request) => request.method == 'POST')
+            .where((request) => request.headers.containsKey('Idempotency-Key'))
+            .map((request) => request.headers['Idempotency-Key']),
+        ['room:create-1', 'session:start-1', 'message:send-1'],
+      );
+      final legacyRequestStart = transport.requests.length;
+      await sdk.rooms.create('Legacy call');
+      await sdk.sessions.start('room-1');
+      await sdk.chat.send('room-1', 'legacy message');
+      expect(
+        transport.requests
+            .skip(legacyRequestStart)
+            .every(
+              (request) => !request.headers.containsKey('Idempotency-Key'),
+            ),
+        isTrue,
+      );
       await sdk.close();
     },
   );
@@ -630,6 +672,16 @@ void main() {
         throwsA(isA<StudyRoomException>()),
       );
       await expectLater(
+        sdk.rooms.create('Focus', idempotencyKey: 'invalid key'),
+        throwsA(
+          isA<StudyRoomException>().having(
+            (error) => error.code,
+            'code',
+            'invalid_idempotency_key',
+          ),
+        ),
+      );
+      await expectLater(
         sdk.sessions.update('session-1', StudySessionStatus.idle),
         throwsA(isA<StudyRoomException>()),
       );
@@ -769,6 +821,130 @@ void main() {
     expect(settings.backgroundMaskOpacity, 0);
     expect(settings.desktopSection, 'history');
     await subscription.cancel();
+  });
+
+  test(
+    'study backups round-trip and support merge and replace imports',
+    () async {
+      final source = MemoryStudyStore();
+      final date = DateTime(2026, 6, 19);
+      await source.saveTodayGoal(
+        date,
+        const TodayGoal(text: 'Backup goal', targetPomodoros: 3),
+      );
+      await source.addFocusSession(
+        date,
+        const Duration(minutes: 50),
+        pomodoros: 2,
+      );
+      await source.saveTaskRecord(
+        date,
+        const StudyTaskRecord(id: 'task-1', title: 'Review', completed: true),
+      );
+      await source.saveSettings(
+        StudyFocusSettings(soundTrackId: 'rain', desktopSection: 'history'),
+      );
+
+      final encoded = jsonEncode((await source.exportBackup()).toJson());
+      final backup = StudyDataBackup.fromJson(
+        Map<String, dynamic>.from(jsonDecode(encoded) as Map),
+      );
+      expect(jsonEncode(backup.toJson()), encoded);
+      final target = MemoryStudyStore();
+      await target.saveTodayGoal(
+        DateTime(2026, 6, 18),
+        const TodayGoal(text: 'Preserved'),
+      );
+      await target.saveTaskRecord(
+        date,
+        const StudyTaskRecord(
+          id: 'task-1',
+          title: 'Old title',
+          completed: false,
+        ),
+      );
+      await target.saveTaskRecord(
+        date,
+        const StudyTaskRecord(
+          id: 'local-only',
+          title: 'Keep local task',
+          completed: false,
+        ),
+      );
+      await target.importBackup(backup);
+
+      expect((await target.loadTodayGoal(date)).text, 'Backup goal');
+      expect(
+        (await target.loadDayRecord(date)).focusDuration,
+        const Duration(minutes: 50),
+      );
+      final mergedTasks = await target.loadTaskRecords(date);
+      expect(mergedTasks.map((task) => task.id), ['task-1', 'local-only']);
+      expect(mergedTasks.first.title, 'Review');
+      expect(mergedTasks.first.completed, isTrue);
+      expect(mergedTasks.last.title, 'Keep local task');
+      expect((await target.loadSettings()).desktopSection, 'history');
+      expect(
+        (await target.loadTodayGoal(DateTime(2026, 6, 18))).text,
+        'Preserved',
+      );
+
+      await target.importBackup(backup, mode: StudyBackupImportMode.replace);
+      expect((await target.loadTodayGoal(DateTime(2026, 6, 18))).text, isEmpty);
+      expect((await target.loadTaskRecords(date)).map((task) => task.id), [
+        'task-1',
+      ]);
+    },
+  );
+
+  test('study backups reject unsupported schemas and duplicate task ids', () {
+    expect(
+      () => StudyDataBackup.fromJson({
+        'schemaVersion': 2,
+        'exportedAt': '2026-06-19T00:00:00.000Z',
+        'goalsByDate': <String, dynamic>{},
+        'dayRecords': <dynamic>[],
+        'tasksByDate': <String, dynamic>{},
+        'settings': StudyFocusSettings().toJson(),
+      }),
+      throwsFormatException,
+    );
+    expect(
+      () => StudyDataBackup.fromJson({
+        'schemaVersion': 1,
+        'exportedAt': 'not-a-timestamp',
+        'goalsByDate': <String, dynamic>{},
+        'dayRecords': <dynamic>[],
+        'tasksByDate': <String, dynamic>{},
+        'settings': StudyFocusSettings().toJson(),
+      }),
+      throwsFormatException,
+    );
+    expect(
+      () => StudyDataBackup.fromJson({
+        'schemaVersion': 1,
+        'exportedAt': '2026-06-19T00:00:00.000Z',
+        'goalsByDate': <String, dynamic>{
+          '2026-02-30': const TodayGoal(text: 'Invalid date').toJson(),
+        },
+        'dayRecords': <dynamic>[],
+        'tasksByDate': <String, dynamic>{},
+        'settings': StudyFocusSettings().toJson(),
+      }),
+      throwsFormatException,
+    );
+    expect(
+      () => StudyDataBackup(
+        exportedAt: DateTime.utc(2026, 6, 19),
+        tasksByDate: const {
+          '2026-06-19': [
+            StudyTaskRecord(id: 'same', title: 'One', completed: false),
+            StudyTaskRecord(id: 'same', title: 'Two', completed: false),
+          ],
+        },
+      ),
+      throwsFormatException,
+    );
   });
 
   group('PomodoroController', () {
@@ -1214,10 +1390,11 @@ Map<String, dynamic> _event(
 };
 
 class _Request {
-  const _Request(this.method, this.path, this.body);
+  const _Request(this.method, this.path, this.body, this.headers);
   final String method;
   final String path;
   final Map<String, dynamic>? body;
+  final Map<String, String> headers;
 }
 
 class FakeTransport implements StudyRoomTransport {
@@ -1234,7 +1411,7 @@ class FakeTransport implements StudyRoomTransport {
     Map<String, String> headers = const {},
     StudyRoomCancellationToken? cancellationToken,
   }) async {
-    requests.add(_Request(method, path, body));
+    requests.add(_Request(method, path, body, Map.unmodifiable(headers)));
     return handler?.call(method, path, body);
   }
 

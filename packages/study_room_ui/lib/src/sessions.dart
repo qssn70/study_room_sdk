@@ -5,6 +5,7 @@ import 'localizations.dart';
 
 export 'focus_ui.dart' show PomodoroTimerView;
 
+/// Room-session elapsed time and lifecycle action controls.
 class FocusTimer extends StatelessWidget {
   const FocusTimer({
     required this.elapsed,

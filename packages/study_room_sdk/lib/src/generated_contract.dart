@@ -1,6 +1,7 @@
 // coverage:ignore-file
 // GENERATED FILE. Run npm run generate:contracts; do not edit.
-const studyRoomContractVersion = "0.4.0";
+// dart format off
+const studyRoomContractVersion = "0.4.1";
 const studyRoomRealtimeSchemaVersion = 1;
 const studyRoomRealtimeEventTypes = <String>{
   "room.state",
@@ -540,6 +541,34 @@ final class ErrorResponseWire {
     };
 }
 
+final class IdempotencyErrorResponseWire {
+  IdempotencyErrorResponseWire({
+    required this.code,
+    required this.message,
+    this.details,
+    required this.requestId
+  });
+
+  final String code;
+  final String message;
+  final Object? details;
+  final String requestId;
+
+  factory IdempotencyErrorResponseWire.fromJson(Map<String, Object?> json) => IdempotencyErrorResponseWire(
+      code: json["code"] as String,
+      message: json["message"] as String,
+      details: json["details"] == null ? null : json["details"],
+      requestId: json["requestId"] as String,
+    );
+
+  Map<String, Object?> toJson() => <String, Object?>{
+      "code": code,
+      "message": message,
+      if (details != null) "details": details,
+      "requestId": requestId,
+    };
+}
+
 final class LivenessResponseWire {
   LivenessResponseWire({
     required this.status
@@ -793,3 +822,4 @@ final class SessionUpdatedEventWire extends RealtimeEnvelopeWire {
   @override
   final StudySessionWire payload;
 }
+// dart format on

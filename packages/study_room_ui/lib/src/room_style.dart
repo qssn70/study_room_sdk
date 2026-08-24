@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+/// Color tokens used by the room integration widgets.
 class StudyRoomTheme {
   const StudyRoomTheme({
     this.activeColor = const Color(0xFF2563EB),
@@ -12,6 +13,7 @@ class StudyRoomTheme {
   final Color borderColor;
 }
 
+/// Optional copy overrides for the room integration widgets.
 class StudyRoomCopy {
   const StudyRoomCopy({
     this.emptyMembers,

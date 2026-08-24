@@ -3,6 +3,7 @@ import {
   Controller,
   Delete,
   Get,
+  Headers,
   HttpCode,
   Param,
   Patch,
@@ -40,10 +41,26 @@ export class RoomsController {
   constructor(private readonly rooms: RoomsService, private readonly realtime: RealtimePublisher) {}
 
   @Post('rooms')
-  async create(@Body() body: CreateRoomBodyDto, @CurrentIdentity() identity: ExternalIdentity) {
-    const room = await this.rooms.create(body.title, identity);
-    this.realtime.publishRoom(identity.appId, room.id, 'room.state', room, room.version);
-    return room;
+  async create(
+    @Body() body: CreateRoomBodyDto,
+    @CurrentIdentity() identity: ExternalIdentity,
+    @Headers('idempotency-key') idempotencyKey?: string,
+  ) {
+    const result = await this.rooms.createIdempotent(
+      body.title,
+      identity,
+      idempotencyKey,
+    );
+    if (result.created) {
+      this.realtime.publishRoom(
+        identity.appId,
+        result.value.id,
+        'room.state',
+        result.value,
+        result.value.version,
+      );
+    }
+    return result.value;
   }
 
   @Get('rooms')

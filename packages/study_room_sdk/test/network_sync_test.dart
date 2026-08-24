@@ -465,8 +465,9 @@ void main() {
         if (RegExp(r'^/v1/rooms/room-[0-9]+$').hasMatch(path)) {
           if (delayRoomGets) {
             activeRoomGets += 1;
-            if (activeRoomGets > maximumRoomGets)
+            if (activeRoomGets > maximumRoomGets) {
               maximumRoomGets = activeRoomGets;
+            }
             await Future<void>.delayed(const Duration(milliseconds: 10));
             activeRoomGets -= 1;
           }

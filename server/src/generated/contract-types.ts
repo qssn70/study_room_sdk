@@ -355,6 +355,13 @@ export interface components {
             readonly message: string;
             readonly requestId: string;
         };
+        readonly IdempotencyErrorResponse: {
+            /** @enum {string} */
+            readonly code: "idempotency_conflict" | "idempotency_result_unavailable";
+            readonly details?: unknown;
+            readonly message: string;
+            readonly requestId: string;
+        };
         readonly JoinRequest: {
             /** Format: date-time */
             readonly createdAt: string;
@@ -487,6 +494,16 @@ export interface components {
                 readonly "application/json": components["schemas"]["ErrorResponse"];
             };
         };
+        /** @description Resource state conflict or idempotency-key conflict */
+        readonly IdempotencyConflict: {
+            headers: {
+                readonly "x-request-id": components["headers"]["RequestId"];
+                readonly [name: string]: unknown;
+            };
+            content: {
+                readonly "application/json": components["schemas"]["ErrorResponse"] | components["schemas"]["IdempotencyErrorResponse"];
+            };
+        };
         /** @description Internal server error */
         readonly InternalServerError: {
             headers: {
@@ -542,6 +559,8 @@ export interface components {
     parameters: {
         readonly AppId: components["schemas"]["AppId"];
         readonly Cursor: string;
+        /** @description Reuse the same key only for retries of the same normalized create request. Records expire after 24 hours. */
+        readonly IdempotencyKey: string;
         readonly Limit: number;
         readonly RequestId: string;
         readonly RoomId: string;
@@ -816,7 +835,10 @@ export interface operations {
     readonly createRoom: {
         readonly parameters: {
             readonly query?: never;
-            readonly header?: never;
+            readonly header?: {
+                /** @description Reuse the same key only for retries of the same normalized create request. Records expire after 24 hours. */
+                readonly "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             readonly path?: never;
             readonly cookie?: never;
         };
@@ -838,7 +860,7 @@ export interface operations {
             };
             readonly 400: components["responses"]["BadRequest"];
             readonly 401: components["responses"]["Unauthorized"];
-            readonly 409: components["responses"]["Conflict"];
+            readonly 409: components["responses"]["IdempotencyConflict"];
             readonly 429: components["responses"]["TooManyRequests"];
             readonly 500: components["responses"]["InternalServerError"];
             readonly 503: components["responses"]["ServiceUnavailable"];
@@ -1157,7 +1179,10 @@ export interface operations {
     readonly sendMessage: {
         readonly parameters: {
             readonly query?: never;
-            readonly header?: never;
+            readonly header?: {
+                /** @description Reuse the same key only for retries of the same normalized create request. Records expire after 24 hours. */
+                readonly "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             readonly path: {
                 readonly roomId: components["parameters"]["RoomId"];
             };
@@ -1183,6 +1208,7 @@ export interface operations {
             readonly 401: components["responses"]["Unauthorized"];
             readonly 403: components["responses"]["Forbidden"];
             readonly 404: components["responses"]["NotFound"];
+            readonly 409: components["responses"]["IdempotencyConflict"];
             readonly 429: components["responses"]["TooManyRequests"];
             readonly 500: components["responses"]["InternalServerError"];
             readonly 503: components["responses"]["ServiceUnavailable"];
@@ -1226,7 +1252,10 @@ export interface operations {
     readonly startSession: {
         readonly parameters: {
             readonly query?: never;
-            readonly header?: never;
+            readonly header?: {
+                /** @description Reuse the same key only for retries of the same normalized create request. Records expire after 24 hours. */
+                readonly "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             readonly path: {
                 readonly roomId: components["parameters"]["RoomId"];
             };
@@ -1248,7 +1277,7 @@ export interface operations {
             readonly 401: components["responses"]["Unauthorized"];
             readonly 403: components["responses"]["Forbidden"];
             readonly 404: components["responses"]["NotFound"];
-            readonly 409: components["responses"]["Conflict"];
+            readonly 409: components["responses"]["IdempotencyConflict"];
             readonly 429: components["responses"]["TooManyRequests"];
             readonly 500: components["responses"]["InternalServerError"];
             readonly 503: components["responses"]["ServiceUnavailable"];
@@ -1291,7 +1320,7 @@ export interface operations {
     };
 }
 
-export const contractVersion = "0.4.0" as const;
+export const contractVersion = "0.4.1" as const;
 export const realtimeSchemaVersion = 1 as const;
 
 export type AppIdWire = components["schemas"]["AppId"];
@@ -1320,6 +1349,7 @@ export type TransferOwnershipRequestWire = components["schemas"]["TransferOwners
 export type SendMessageRequestWire = components["schemas"]["SendMessageRequest"];
 export type UpdateSessionRequestWire = components["schemas"]["UpdateSessionRequest"];
 export type ErrorResponseWire = components["schemas"]["ErrorResponse"];
+export type IdempotencyErrorResponseWire = components["schemas"]["IdempotencyErrorResponse"];
 export type LivenessResponseWire = components["schemas"]["LivenessResponse"];
 export type ReadinessResponseWire = components["schemas"]["ReadinessResponse"];
 export type MetricsResponseWire = components["schemas"]["MetricsResponse"];

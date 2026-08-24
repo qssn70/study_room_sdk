@@ -91,7 +91,7 @@ describe('running HTTP responses conform to OpenAPI', () => {
     update: jest.fn(async () => ({ ...application, enabled: false })),
   };
   const rooms = {
-    create: jest.fn(async () => room),
+    createIdempotent: jest.fn(async () => ({ value: room, created: true })),
     list: jest.fn(async () => ({ items: [room], nextCursor: null })),
     get: jest.fn(async () => room),
     requestJoin: jest.fn(async () => ({ request: joinRequest, created: true })),
@@ -109,13 +109,13 @@ describe('running HTTP responses conform to OpenAPI', () => {
     delete: jest.fn(async () => ({ userIds: ['owner-1'], roomVersion: 2 })),
   };
   const sessions = {
-    start: jest.fn(async () => session),
+    startIdempotent: jest.fn(async () => ({ value: session, created: true })),
     listActive: jest.fn(async () => ({ items: [session], nextCursor: null })),
     update: jest.fn(async () => ({ ...session, status: 'paused' })),
   };
   const chat = {
     history: jest.fn(async () => ({ items: [message], nextCursor: null })),
-    send: jest.fn(async () => message),
+    sendIdempotent: jest.fn(async () => ({ value: message, created: true })),
   };
   const realtime = {
     publishRoom: jest.fn(), publishUser: jest.fn(), evictUser: jest.fn(async () => undefined),
@@ -211,7 +211,10 @@ describe('running HTTP responses conform to OpenAPI', () => {
     const missing = await request(app.getHttpServer()).get(`/v1/rooms/${roomId}`).expect(404);
     validateActualResponse('getRoom', 404, missing);
 
-    rooms.create.mockRejectedValueOnce(new ConflictException('Already exists'));
+    rooms.createIdempotent.mockRejectedValueOnce(new ConflictException({
+      code: 'idempotency_conflict',
+      message: 'Key was reused',
+    }));
     const conflict = await request(app.getHttpServer()).post('/v1/rooms').send({ title: 'Focus' }).expect(409);
     validateActualResponse('createRoom', 409, conflict);
 

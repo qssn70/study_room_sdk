@@ -58,9 +58,10 @@ describe('SessionsService durable transitions', () => {
       status: 'RUNNING', startedAt: new Date(), finishedAt: null, updatedAt: new Date(),
     };
     const studySession = { create: jest.fn(async () => created) };
+    const auditLog = { create: jest.fn(async () => undefined) };
     const prisma = {
       studySession,
-      $transaction: jest.fn(async (action) => action({ studySession })),
+      $transaction: jest.fn(async (action) => action({ studySession, auditLog })),
     };
     const service = new SessionsService(prisma as never, rooms as never);
     await expect(service.start('room-1', identity)).resolves.toMatchObject({ status: 'running' });
@@ -132,10 +133,15 @@ describe('ChatService pagination', () => {
       id: 'message-1', roomId: 'room-1', senderId: 'user-1', text: 'hello',
       sentAt: new Date('2026-08-09T00:00:00Z'), sender: { displayName: 'Lin' },
     };
-    const prisma = { chatMessage: {
+    const chatMessage = {
       create: jest.fn(async () => row),
       findMany: jest.fn(async () => [row]),
-    } };
+    };
+    const auditLog = { create: jest.fn(async () => undefined) };
+    const prisma = {
+      chatMessage,
+      $transaction: jest.fn(async (action) => action({ chatMessage, auditLog })),
+    };
     const service = new ChatService(prisma as never, chatRooms as never);
     await expect(service.send('room-1', identity, ' hello ')).resolves.toMatchObject({ text: 'hello' });
     await expect(service.history('room-1', identity, 'cursor', 50)).resolves.toMatchObject({ nextCursor: null });

@@ -10,6 +10,7 @@ export 'room_management.dart'
     show JoinRequestInboxView, RoomMemberManagementView, StudyRoomLobbyView;
 export 'room_style.dart' show StudyRoomCopy, StudyRoomTheme;
 
+/// Complete room surface combining members, session controls, and chat.
 class StudyRoomView extends StatelessWidget {
   const StudyRoomView({
     required this.room,
@@ -108,6 +109,7 @@ class StudyRoomView extends StatelessWidget {
   }
 }
 
+/// Responsive room title, member count, and connection-status header.
 class RoomHeader extends StatelessWidget {
   const RoomHeader({
     required this.title,
@@ -195,6 +197,7 @@ class RoomHeader extends StatelessWidget {
   }
 }
 
+/// Accessible responsive grid of room members and presence states.
 class MemberGrid extends StatelessWidget {
   const MemberGrid({
     required this.members,
@@ -307,6 +310,7 @@ class MemberGrid extends StatelessWidget {
   }
 }
 
+/// Colors, icons, and avatar sizing for [SilentCompanionList].
 class SilentCompanionTheme {
   const SilentCompanionTheme({
     this.avatarSize = 40,
@@ -338,6 +342,7 @@ class SilentCompanionTheme {
   };
 }
 
+/// Compact animated list of online companions other than the current user.
 class SilentCompanionList extends StatelessWidget {
   const SilentCompanionList({
     required this.currentUserId,

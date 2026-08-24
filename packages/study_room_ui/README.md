@@ -15,8 +15,10 @@ MaterialApp(
 
 Use `JoinRequestInboxView` and `RoomMemberManagementView` on owner routes. `StudyFocusKitView` supports responsive phone/desktop layouts, keyboard focus, text scaling, offline gradients, bundled audio, local analytics, and user-scoped SharedPreferences persistence.
 
+`SharedPreferencesStudyStore` also implements `StudyBackupStore`. Merge imports replace matching dates and task IDs while preserving unrelated local tasks; replace imports clear only the selected scope and keep migration markers. Backup JSON is plaintext personal study information, so the host is responsible for encryption, transfer, retention, and access control.
+
 The focus workspace is split into independent coordinator, responsive-layout,
-desktop, timer/goal, persistence, audio, background, and public compatibility
+desktop shell/page parts, timer/goal, persistence, audio, background, and public compatibility
 libraries. Package-internal immutable models and action callbacks connect those
 libraries; the internal contracts are intentionally not exported from the
 package barrel.

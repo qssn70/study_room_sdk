@@ -1,6 +1,6 @@
 name: study_room_ui
 description: Optional Flutter widgets for the online study room SDK.
-version: 0.4.0
+version: 0.4.1
 homepage: https://github.com/qssn70/study_room_sdk
 repository: https://github.com/qssn70/study_room_sdk
 issue_tracker: https://github.com/qssn70/study_room_sdk/issues
@@ -24,12 +24,12 @@ dependencies:
   intl: ^0.20.2
   just_audio: ^0.10.5
   shared_preferences: ^2.3.3
-  study_room_sdk: ^0.4.0
+  study_room_sdk: ^0.4.1
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
-  lints: ^5.0.0
+  lints: ^6.0.0
 
 flutter:
   generate: true

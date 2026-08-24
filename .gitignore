@@ -4,6 +4,7 @@
 build/
 artifacts/
 coverage/
+packages/*/doc/api/
 node_modules/
 dist/
 .env
