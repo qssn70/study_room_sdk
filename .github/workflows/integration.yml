@@ -72,7 +72,7 @@ jobs:
         with:
           flutter-version: '3.44.1'
           cache: true
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: server-test-image-${{ github.run_id }}-${{ github.run_attempt }}
           path: .ci-image
@@ -148,7 +148,7 @@ jobs:
         with:
           flutter-version: '3.44.1'
           cache: true
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: server-test-image-${{ github.run_id }}-${{ github.run_attempt }}
           path: .ci-image
@@ -235,7 +235,7 @@ jobs:
         with:
           flutter-version: '3.44.1'
           cache: true
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: server-test-image-${{ github.run_id }}-${{ github.run_attempt }}
           path: .ci-image
@@ -341,7 +341,7 @@ jobs:
       STUDY_ROOM_SERVER_IMAGE: study-room-server:test-${{ github.sha }}
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: server-test-image-${{ github.run_id }}-${{ github.run_attempt }}
           path: .ci-image
@@ -426,7 +426,7 @@ jobs:
       STUDY_ROOM_SERVER_IMAGE: study-room-server:test-${{ github.sha }}
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: server-test-image-${{ github.run_id }}-${{ github.run_attempt }}
           path: .ci-image
@@ -566,7 +566,7 @@ jobs:
       STUDY_ROOM_SERVER_IMAGE: study-room-server:test-${{ github.sha }}
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: server-test-image-${{ github.run_id }}-${{ github.run_attempt }}
           path: .ci-image
@@ -1036,7 +1036,7 @@ jobs:
       STUDY_ROOM_SERVER_IMAGE: study-room-server:test-${{ github.sha }}
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: server-test-image-${{ github.run_id }}-${{ github.run_attempt }}
           path: .ci-image
@@ -1152,7 +1152,7 @@ jobs:
       STUDY_ROOM_SERVER_IMAGE: study-room-server:test-${{ github.sha }}
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: server-test-image-${{ github.run_id }}-${{ github.run_attempt }}
           path: .ci-image
