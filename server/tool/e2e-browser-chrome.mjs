@@ -5,6 +5,8 @@ import { basename, extname, resolve, sep } from 'node:path';
 import { spawn } from 'node:child_process';
 import { tmpdir } from 'node:os';
 
+import { closeServer, terminateProcess } from './browser-process.mjs';
+
 const root = resolve(
   process.env.E2E_BROWSER_ROOT
     ?? 'artifacts/browser',
@@ -210,9 +212,34 @@ async function main() {
     console.log(`Chrome SDK E2E passed: ${JSON.stringify(reportedResult.assertions)}`);
   } finally {
     client?.close();
-    chrome.kill('SIGTERM');
-    server.close();
-    await rm(profile, { recursive: true, force: true });
+    const cleanupErrors = [];
+    try {
+      await terminateProcess(chrome);
+    } catch (error) {
+      chrome.unref();
+      cleanupErrors.push(error);
+    }
+    try {
+      await closeServer(server);
+    } catch (error) {
+      cleanupErrors.push(error);
+    }
+    try {
+      await rm(profile, {
+        recursive: true,
+        force: true,
+        maxRetries: 5,
+        retryDelay: 100,
+      });
+    } catch (error) {
+      cleanupErrors.push(error);
+    }
+    for (const error of cleanupErrors) {
+      logs.push({
+        type: 'cleanup-error',
+        value: error?.stack ?? error?.message ?? String(error),
+      });
+    }
     await writeFile(logPath, `${JSON.stringify({
       schemaVersion: 1,
       scenario: 'real-chrome-sdk-cors-socketio',
@@ -220,6 +247,11 @@ async function main() {
       result: reportedResult,
       logs,
     }, null, 2)}\n`);
+    if (cleanupErrors.length > 0) {
+      console.warn(`Chrome SDK E2E cleanup warning: ${cleanupErrors
+        .map((error) => error?.message ?? String(error))
+        .join('; ')}`);
+    }
   }
 }
 

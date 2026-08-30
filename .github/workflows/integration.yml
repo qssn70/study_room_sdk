@@ -179,7 +179,7 @@ jobs:
         run: |
           set -o pipefail
           node server/tool/e2e-browser-chrome.mjs \
-            > artifacts/browser-driver.log 2>&1
+            2>&1 | tee artifacts/browser-driver.log
           jq -e '.success == true and all(.assertions[]; . == true)' \
             artifacts/browser-sdk.json > /dev/null
       - name: Capture browser E2E diagnostics
