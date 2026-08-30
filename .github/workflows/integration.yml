@@ -38,7 +38,7 @@ jobs:
             > artifacts/server-image.tar.gz
           sha256sum artifacts/server-image.tar.gz > artifacts/server-image.tar.gz.sha256
       - name: Upload immutable server test image
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: server-test-image-${{ github.run_id }}-${{ github.run_attempt }}
           path: artifacts
@@ -111,7 +111,7 @@ jobs:
             > artifacts/result.json
       - name: Upload real SDK evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: real-dart-sdk-${{ github.run_id }}-${{ github.run_attempt }}
           path: artifacts
@@ -195,7 +195,7 @@ jobs:
             > artifacts/result.json
       - name: Upload Chrome SDK evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: real-chrome-sdk-${{ github.run_id }}-${{ github.run_attempt }}
           path: artifacts
@@ -312,7 +312,7 @@ jobs:
             > artifacts/result.json
       - name: Upload SDK resilience evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: real-dart-sdk-resilience-${{ github.run_id }}-${{ github.run_attempt }}
           path: artifacts
@@ -393,7 +393,7 @@ jobs:
 
       - name: Upload rate-limit evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: compose-rate-limit-${{ github.run_id }}-${{ github.run_attempt }}
           path: artifacts
@@ -527,7 +527,7 @@ jobs:
 
       - name: Upload core evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: compose-core-${{ github.run_id }}-${{ github.run_attempt }}
           path: artifacts
@@ -1006,7 +1006,7 @@ jobs:
 
       - name: Upload resilience evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: compose-resilience-${{ github.run_id }}-${{ github.run_attempt }}
           path: artifacts
@@ -1120,7 +1120,7 @@ jobs:
 
       - name: Upload restore evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: compose-restore-${{ github.run_id }}-${{ github.run_attempt }}
           path: artifacts
@@ -1326,7 +1326,7 @@ jobs:
 
       - name: Upload soak evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: compose-soak-${{ github.run_id }}-${{ github.run_attempt }}
           path: artifacts
