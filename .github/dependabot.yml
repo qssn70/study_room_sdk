@@ -11,6 +11,11 @@ updates:
 
   - package-ecosystem: pub
     directory: /
+    # Flutter 3.44.1 pins intl to 0.20.2 via flutter_localizations.
+    # Revisit this exclusion when upgrading the supported Flutter SDK.
+    ignore:
+      - dependency-name: intl
+        versions: ['0.20.3']
     schedule: { interval: weekly, day: monday }
     groups:
       pub-patch-minor:
