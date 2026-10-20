@@ -24,7 +24,7 @@ jobs:
     env:
       STUDY_ROOM_SERVER_IMAGE: study-room-server:test-${{ github.sha }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Build server test image once
         run: docker build --tag "$STUDY_ROOM_SERVER_IMAGE" --file server/Dockerfile .
       - name: Export compressed image and identity
@@ -67,7 +67,7 @@ jobs:
       SDK_E2E_JWKS: http://127.0.0.1:4000
       SDK_E2E_RESULT_PATH: ${{ github.workspace }}/artifacts/sdk-e2e.json
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: subosito/flutter-action@v2
         with:
           flutter-version: '3.44.1'
@@ -143,7 +143,7 @@ jobs:
       E2E_BROWSER_RESULT_PATH: ${{ github.workspace }}/artifacts/browser-sdk.json
       E2E_BROWSER_LOG_PATH: ${{ github.workspace }}/artifacts/browser-console.json
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: subosito/flutter-action@v2
         with:
           flutter-version: '3.44.1'
@@ -230,7 +230,7 @@ jobs:
       SDK_E2E_RESULT_PATH: ${{ github.workspace }}/artifacts/sdk-resilience.json
       SDK_E2E_READY_PATH: ${{ github.workspace }}/artifacts/sdk-resilience.ready
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: subosito/flutter-action@v2
         with:
           flutter-version: '3.44.1'
@@ -340,7 +340,7 @@ jobs:
       E2E_RUN_ID: rate-${{ github.run_id }}-${{ github.run_attempt }}
       STUDY_ROOM_SERVER_IMAGE: study-room-server:test-${{ github.sha }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/download-artifact@v4
         with:
           name: server-test-image-${{ github.run_id }}-${{ github.run_attempt }}
@@ -425,7 +425,7 @@ jobs:
       E2E_JWKS_RETIRE_WAIT_MS: 2500
       STUDY_ROOM_SERVER_IMAGE: study-room-server:test-${{ github.sha }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/download-artifact@v4
         with:
           name: server-test-image-${{ github.run_id }}-${{ github.run_attempt }}
@@ -565,7 +565,7 @@ jobs:
       OTEL_BSP_MAX_QUEUE_SIZE: 16384
       STUDY_ROOM_SERVER_IMAGE: study-room-server:test-${{ github.sha }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/download-artifact@v4
         with:
           name: server-test-image-${{ github.run_id }}-${{ github.run_attempt }}
@@ -1035,7 +1035,7 @@ jobs:
       E2E_RUN_ID: restore-${{ github.run_id }}-${{ github.run_attempt }}
       STUDY_ROOM_SERVER_IMAGE: study-room-server:test-${{ github.sha }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/download-artifact@v4
         with:
           name: server-test-image-${{ github.run_id }}-${{ github.run_attempt }}
@@ -1151,7 +1151,7 @@ jobs:
       STUDY_ROOM_PRESENCE_REFRESH_SECONDS: 5
       STUDY_ROOM_SERVER_IMAGE: study-room-server:test-${{ github.sha }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/download-artifact@v4
         with:
           name: server-test-image-${{ github.run_id }}-${{ github.run_attempt }}
