@@ -191,7 +191,7 @@ jobs:
         run: flutter test --no-pub --dart-define=STUDY_ROOM_RUN_GOLDENS=true test/golden/study_room_golden_harness_test.dart
       - name: Upload generated Ubuntu Golden baselines
         if: ${{ always() && github.event_name == 'workflow_dispatch' && inputs.update_goldens }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: golden-baselines-${{ github.sha }}
           path: |
@@ -201,7 +201,7 @@ jobs:
           retention-days: 14
       - name: Upload Golden expected, actual, and diff images
         if: ${{ failure() && (github.event_name != 'workflow_dispatch' || inputs.update_goldens != true) }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: golden-failure-${{ github.sha }}
           path: |
