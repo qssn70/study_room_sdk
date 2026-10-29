@@ -5,6 +5,7 @@ import { load } from 'js-yaml';
 type ComposeService = {
   profiles?: string[];
   depends_on?: Record<string, { required?: boolean }>;
+  '<<'?: ComposeService;
 };
 
 type ComposeDocument = {
@@ -26,7 +27,9 @@ describe('Compose JWKS fixture isolation', () => {
     expect(compose.services.seed.profiles).toEqual(['dev', 'test']);
     expect(compose.services.e2e.profiles).toEqual(['test']);
     for (const apiName of ['api-1', 'api-2']) {
-      const dependencies = compose.services[apiName].depends_on ?? {};
+      // js-yaml v5 preserves YAML merge keys as <<; Compose resolves them at runtime.
+      const service = compose.services[apiName];
+      const dependencies = service.depends_on ?? service['<<']?.depends_on ?? {};
       expect(Object.keys(dependencies)).toEqual(
         expect.arrayContaining(['migrate', 'redis']),
       );
