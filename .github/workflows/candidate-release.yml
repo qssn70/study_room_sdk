@@ -17,7 +17,7 @@ jobs:
     name: Validate release version alignment
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -54,7 +54,7 @@ jobs:
     needs: validate_versions
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: docker/setup-buildx-action@v3
       - name: Build local server image for SBOM
         run: docker build --tag "study-room-server:${GITHUB_REF_NAME}" --file server/Dockerfile .
