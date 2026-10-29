@@ -30,7 +30,8 @@
     "uuid": "11.1.1"
   },
   "devDependencies": {
-    "deepmerge-ts": "8.0.2"
+    "deepmerge-ts": "8.0.2",
+    "class-validator": "^0.15.1"
   },
   "workspaces": [
     "server"
