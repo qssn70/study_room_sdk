@@ -1,0 +1,38 @@
+name: Refresh npm security lockfile (temporary)
+
+on:
+  push:
+    branches: [fix/ci-audit-security-20261029]
+
+permissions:
+  contents: write
+
+jobs:
+  refresh-lock:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: true
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+      - name: Re-resolve dependencies and apply non-breaking audit fixes
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install --package-lock-only --ignore-scripts --no-fund
+          npm audit fix --package-lock-only --ignore-scripts --no-fund || echo "Some advisories have no compatible upstream fix; preserving other security updates."
+          npm ci --ignore-scripts --no-fund
+          npm audit --audit-level=high || echo "Outstanding advisories will remain visible in the normal CI job."
+      - name: Commit security lockfile updates
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add package-lock.json
+          if ! git diff --cached --quiet; then
+            git commit -m 'chore(deps): refresh npm lockfile with security patches'
+            git push origin "HEAD:${GITHUB_REF_NAME}"
+          fi
