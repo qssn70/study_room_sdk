@@ -55,7 +55,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v4
       - name: Build local server image for SBOM
         run: docker build --tag "study-room-server:${GITHUB_REF_NAME}" --file server/Dockerfile .
       - name: Export OCI image archive
