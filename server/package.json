@@ -30,13 +30,13 @@
     "uuid": "11.1.1"
   },
   "dependencies": {
-    "@nestjs/common": "^11.1.27",
-    "@nestjs/core": "^11.1.27",
-    "@nestjs/platform-express": "^11.1.27",
-    "@nestjs/platform-socket.io": "^11.1.27",
-    "@nestjs/schedule": "^6.0.0",
-    "@nestjs/swagger": "^11.4.4",
-    "@nestjs/websockets": "^11.1.27",
+    "@nestjs/common": "^12.3.2",
+    "@nestjs/core": "^12.3.2",
+    "@nestjs/platform-express": "^12.3.2",
+    "@nestjs/platform-socket.io": "^12.3.2",
+    "@nestjs/schedule": "^12.0.3",
+    "@nestjs/swagger": "^12.1.2",
+    "@nestjs/websockets": "^12.3.2",
     "@opentelemetry/api": "^1.10.0",
     "@opentelemetry/auto-instrumentations-node": "^0.83.0",
     "@opentelemetry/exporter-trace-otlp-http": "^0.301.0",
@@ -58,7 +58,7 @@
     "socket.io": "^4.8.4"
   },
   "devDependencies": {
-    "@nestjs/testing": "^11.1.27",
+    "@nestjs/testing": "^12.3.2",
     "@redocly/cli": "^2.76.0",
     "@types/express": "^5.0.3",
     "@types/jest": "^30.0.0",
@@ -88,6 +88,18 @@
         "branches": 80,
         "lines": 80
       }
-    }
+    },
+    "transform": {
+      "^.+\\.tsx?$": [
+        "ts-jest",
+        {
+          "tsconfig": "tsconfig.json"
+        }
+      ],
+      "^.+\\.m?jsx?$": "<rootDir>/tool/jest-esm-transform.cjs"
+    },
+    "transformIgnorePatterns": [
+      "/node_modules/(?!@nestjs/)"
+    ]
   }
 }
