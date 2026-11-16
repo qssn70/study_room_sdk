@@ -6,7 +6,8 @@ const ts = require('typescript');
 module.exports = {
   process(sourceText, sourcePath) {
     return {
-      code: ts.transpileModule(sourceText, {
+      code: ts.transpileModule(
+        sourceText.replace(/\bimport\.meta\.url\b/g, "require('node:url').pathToFileURL(__filename).href"), {
         fileName: sourcePath,
         compilerOptions: {
           allowJs: true,
