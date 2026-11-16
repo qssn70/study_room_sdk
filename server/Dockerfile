@@ -19,6 +19,7 @@ COPY --from=build /app/server/dist ./server/dist
 COPY --from=build /app/server/node_modules ./server/node_modules
 COPY --from=build /app/server/package.json ./server/package.json
 COPY --from=build /app/server/prisma ./server/prisma
+COPY --from=build /app/server/prisma.config.ts ./server/prisma.config.ts
 COPY --from=build /app/server/tool ./server/tool
 WORKDIR /app/server
 RUN node -e "require('./dist/telemetry.js')"

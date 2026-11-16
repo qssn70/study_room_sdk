@@ -1,4 +1,5 @@
 import { PrismaClient } from '@prisma/client';
+import { PrismaPg } from '@prisma/adapter-pg';
 
 const runtimeProfile = process.env.STUDY_ROOM_RUNTIME_PROFILE ?? 'production';
 if (!['dev', 'test'].includes(runtimeProfile) || process.env.STUDY_ROOM_ALLOW_INSECURE_JWKS !== 'true') {
@@ -20,7 +21,10 @@ if (fixtureBaseUrl.protocol !== 'http:' || !(isLoopback || fixtureHostname === '
 }
 
 const fixtureUrl = (path) => new URL(path, fixtureBaseUrl).toString();
-const prisma = new PrismaClient();
+if (!process.env.DATABASE_URL) throw new Error('DATABASE_URL is required for seeding');
+const prisma = new PrismaClient({
+  adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL, connectionTimeoutMillis: 5000 }),
+});
 
 try {
   await prisma.application.upsert({
