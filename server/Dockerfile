@@ -3,7 +3,7 @@ FROM node:26-alpine AS build
 WORKDIR /app
 COPY package.json package-lock.json ./
 COPY server/package.json ./server/package.json
-RUN npm ci
+RUN npm ci && mkdir -p server/node_modules
 
 COPY contracts ./contracts
 COPY server ./server
