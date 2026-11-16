@@ -115,7 +115,7 @@ jobs:
           test -s artifacts/candidate/version-manifest.json
           (cd artifacts/candidate && sha256sum --check SHA256SUMS)
       - name: Create draft release with server candidate artifacts only
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           draft: true
           generate_release_notes: true
