@@ -4,11 +4,12 @@ const ts = require('typescript');
 
 module.exports = {
   process(sourceText, sourcePath) {
-    // Swagger UI declares its own "require" using createRequire(import.meta.url).
-    // A CommonJS wrapper already supplies that variable; avoid redeclaring it.
+    // Some ESM files define their own 'require' via createRequire(import.meta.url).
+    // Jest wraps transformed CommonJS in a function that already has 'require'.
+    // Rename only these ESM-local declarations (and their references).
     let source = sourceText;
-    if (sourcePath.includes('/@nestjs/swagger/dist/swagger-ui/swagger-ui.js')) {
-      source = source.replace(/\brequire\b/g, '__swaggerEsmRequire');
+    if (/\b(?:const|let|var)\s+require\s*=/.test(source) && source.includes('createRequire')) {
+      source = source.replace(/\brequire\b/g, '__esmLocalRequire');
     }
     source = source.replace(/\bimport\.meta\.url\b/g, "require('node:url').pathToFileURL(__filename).href");
     return {
